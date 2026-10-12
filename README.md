@@ -187,7 +187,6 @@ esac
 echo "Konfigurasi untuk $NODE selesai."
 ip -br addr
 ip route
-
 ```
 
 Jalankan di masing-masing node:
@@ -272,7 +271,48 @@ Inumaki:
    <img width="890" height="308" alt="image" src="https://github.com/user-attachments/assets/013df6bd-d7da-4ada-942a-6cde292121c0" />
 
 
+## Soal 2: Mengonfigurasikan Tengen agar dapat mengalokasikan alamat yang membutuhkan konfigurasi dinamis 
 
+Karena di soal 2 Tengen diminta untuk berada di IP 192.238.4.10 perlu adanya perubahan dengan IP sebelumnya.
 
+```
+ip addr replace 192.238.4.10/24 dev eth0
+ip addr del 192.238.4.2/24 dev eth0
+```
+
+Script diatas merubah IP Tengen yang awalnya 192.238.4.2 menjadi 192.238.4.10 sesuai dengan yang diminta soal.  
+
+<img width="1051" height="249" alt="image" src="https://github.com/user-attachments/assets/f95bbb73-760c-4e7e-af8c-9fef0f67cf48" />
+
+Lalu karena IP sekarang bentrok dengan IP dari node Maki maka di IP node Maki perlu dirubah ke IP kosong disini saya memilih 192.238.4.22.
+
+```
+ip addr replace 192.238.4.22/24 dev eth0
+ip addr del 192.238.4.10/24 dev eth0
+```
+<img width="1053" height="245" alt="image" src="https://github.com/user-attachments/assets/3d1a0721-ecd4-4308-b4b5-9ec77cd1b7cd" />
+
+### Langkah 1: Pasang dan konfigurasi DHCP server di Tengen
+
+```
+apt-get update
+apt-get install -y isc-dhcp-server
+```
+
+### Langkah 2: Validasi dan jalankan service 
+
+```
+dhcpd -t -4 -cf /etc/dhcp/dhcpd.conf
+```
+<img width="871" height="228" alt="image" src="https://github.com/user-attachments/assets/7aa8bffe-c704-4f77-8db1-a1b83af82494" />
+
+Restart dan cek service:
+
+```
+service isc-dhcp-server restart
+service isc-dhcp-server status
+```
+
+<img width="767" height="140" alt="image" src="https://github.com/user-attachments/assets/25c49a6a-d17a-4ad3-9336-09334071c529" />
 
 
