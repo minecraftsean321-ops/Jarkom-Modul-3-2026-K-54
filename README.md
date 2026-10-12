@@ -99,3 +99,102 @@ Agar fowarding tetap aktif setelah di reboot, simpan pengaturannya:
 echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-jichi-router.conf
 ```
 
+### Langkah 2: Tetapkan IP host infrastruktur
+
+Gunakan script ini untuk node selain jichi di network 1 dan 4. Di script tersebut setiap node telah ditetapkan IP nya dan bisa diterapkan ke setiap node agar mengurangi pembuatan script yang hampir sama. Simpan di `/root/node-config.sh`. lalu `chmod +x /root/node-config.sh`.
+
+```
+#!/bin/sh
+set -eu
+
+NODE="$(hostname -s)"
+IFACE="eth0"
+
+set_static_ip() {
+    IP="$1"
+    GATEWAY="$2"
+
+    ip link set "$IFACE" up
+    ip addr replace "$IP/24" dev "$IFACE"
+    ip route replace default via "$GATEWAY"
+    printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
+}
+
+# Nameserver awal sesuai ketentuan persiapan tugas
+printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
+
+case "$NODE" in
+    utahime)
+        set_static_ip 192.238.1.2 192.238.1.1
+        ;;
+    shoko)
+        set_static_ip 192.238.1.3 192.238.1.1
+        ;;
+    gojo)
+        set_static_ip 192.238.1.4 192.238.1.1
+        ;;
+
+    tengen)
+        set_static_ip 192.238.4.2 192.238.4.1
+        ;;
+    geto)
+        set_static_ip 192.238.4.3 192.238.4.1
+        ;;
+    maki)
+        set_static_ip 192.238.4.10 192.238.4.1
+        ;;
+    panda)
+        set_static_ip 192.238.4.11 192.238.4.1
+        ;;
+    nanami)
+        set_static_ip 192.238.4.12 192.238.4.1
+        ;;
+    todo)
+        set_static_ip 192.238.4.13 192.238.4.1
+        ;;
+    kirara)
+        set_static_ip 192.238.4.14 192.238.4.1
+        ;;
+    yaga)
+        set_static_ip 192.238.4.20 192.238.4.1
+        ;;
+    inumaki)
+        set_static_ip 192.238.4.21 192.238.4.1
+        ;;
+
+    kugisaki)
+        # Fixed address manual, di luar rentang DHCP yang direncanakan
+        set_static_ip 192.238.3.50 192.238.3.1
+        ;;
+
+    itadori|fushiguro|zenin|okkotsu|ino|kusakabe|miwa)
+        # Klien DHCP; lease dan pool ditentukan oleh konfigurasi DHCP server
+        ip link set "$IFACE" up
+        udhcpc -i "$IFACE" -q
+        ;;
+
+    jichi)
+        echo "Untuk jichi, jalankan /root/jichi-config.sh"
+        exit 1
+        ;;
+
+    *)
+        echo "Hostname tidak dikenali: $NODE"
+        exit 1
+        ;;
+esac
+
+echo "Konfigurasi untuk $NODE selesai."
+ip -br addr
+ip route
+
+```
+
+Jalankan di masing-masing node:
+
+```
+/root/node-config.sh
+```
+
+
+
