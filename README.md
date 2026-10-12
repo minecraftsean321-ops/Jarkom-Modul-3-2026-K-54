@@ -205,6 +205,71 @@ Shoko:
 Gojo:  
 <img width="1018" height="250" alt="image" src="https://github.com/user-attachments/assets/2361be30-a2ac-4cd5-9ee4-d3e81513c288" />
 
+Tengen:  
+<img width="991" height="242" alt="image" src="https://github.com/user-attachments/assets/b1381f36-ae27-4a79-9769-c24acdb09199" />
+
+Yaga:  
+<img width="987" height="242" alt="image" src="https://github.com/user-attachments/assets/c8b6d667-86ed-40b7-83b9-ee6c73f46a2b" />
+
+Maki:  
+<img width="1025" height="247" alt="image" src="https://github.com/user-attachments/assets/6993bccc-889b-4145-9952-972299b13a28" />
+
+Geto:  
+<img width="1024" height="242" alt="image" src="https://github.com/user-attachments/assets/60b19ffc-2d92-4d76-9827-529eb489bef1" />
+
+Panda:  
+<img width="1024" height="246" alt="image" src="https://github.com/user-attachments/assets/5c3a87b8-960c-4952-a910-165f826106d7" />
+
+Nanami:  
+<img width="1027" height="246" alt="image" src="https://github.com/user-attachments/assets/d80bbb3e-49b1-44b6-865e-6ea4f45df848" />
+
+Todo: 
+<img width="1012" height="244" alt="image" src="https://github.com/user-attachments/assets/d7d5c071-90e5-4e54-ba42-7f3afa4e6fa3" />
+
+Kirara:  
+<img width="986" height="243" alt="image" src="https://github.com/user-attachments/assets/0805afa5-7978-42a6-af05-a49cd4059527" />
+
+Inumaki:  
+<img width="984" height="244" alt="image" src="https://github.com/user-attachments/assets/ae6dcd4e-9b8c-4d6f-a17c-e780ef5adb4a" />
+
+
+## Langkah 3: Pengujian 
+
+1. Pengujian di Jichi
+
+   ```
+    ip -br addr
+    ip route
+    sysctl net.ipv4.ip_forward
+    iptables -t nat -L POSTROUTING -n -v
+   ```
+
+   <img width="1062" height="612" alt="image" src="https://github.com/user-attachments/assets/8a9a4573-2270-4f4c-8fe3-8e0b18f52b6c" />
+
+    ```
+    ping -c 3 192.168.122.1
+    ping -c 3 1.1.1.1
+    ```
+    <img width="923" height="493" alt="image" src="https://github.com/user-attachments/assets/078bd472-0817-4cab-b919-1feda247cef2" />
+
+2. Uji gateaway setiap host
+
+   ```
+    ip -br addr
+    ip route
+    ping -c 3 <IP-gateway>
+   ```
+
+   <img width="987" height="488" alt="image" src="https://github.com/user-attachments/assets/d003b399-b73f-4ce1-8df4-a3fdeac5c442" />
+
+3. Uji akses eksternal dari host
+
+   ```
+    ping -c 3 1.1.1.1
+    getent hosts deb.debian.org
+   ```
+
+   <img width="890" height="308" alt="image" src="https://github.com/user-attachments/assets/013df6bd-d7da-4ada-942a-6cde292121c0" />
 
 
 
