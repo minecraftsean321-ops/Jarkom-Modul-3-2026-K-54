@@ -356,4 +356,241 @@ Harus muncul baris proses `/usr/sbin/dhcpd` yang sedang berjalan.
 ```  
 <img width="1067" height="370" alt="image" src="https://github.com/user-attachments/assets/52eda09a-112a-43cb-b3ad-1cfa94384259" />
 
+## Soal 3: Konfigurasi DHCP Relay di Router `jichi`
+jichi bertindak sebagai perantara (relay) yang meneruskan request DHCP dari Network 2 (eth2) dan Network 3 (eth3) menuju DHCP Server tengen (192.238.4.10 via eth4).
+
+### Langkah 1: Konfigurasi Node Jichi 
+
+```
+cat << 'EOF' > /root/jichi-config.sh
+#!/bin/sh
+set -eu
+
+echo "=== [JICHI] Mengonfigurasi Router, NAT, & DHCP Relay ==="
+
+# 1. Aktifkan seluruh interface
+ip link set eth0 up
+ip link set eth1 up
+ip link set eth2 up
+ip link set eth3 up
+ip link set eth4 up
+
+# 2. IP Statis WAN ke Subnet NAT GNS3
+ip addr replace 192.168.122.100/24 dev eth0
+ip route replace default via 192.168.122.1
+printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
+
+# 3. IP Gateway Internal
+ip addr replace 192.238.1.1/24 dev eth1
+ip addr replace 192.238.2.1/24 dev eth2
+ip addr replace 192.238.3.1/24 dev eth3
+ip addr replace 192.238.4.1/24 dev eth4
+
+# 4. IP Forwarding & Source NAT
+sysctl -w net.ipv4.ip_forward=1 > /dev/null
+iptables -F
+iptables -t nat -F
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+# 5. Instalasi isc-dhcp-relay jika belum terpasang
+if ! command -v dhcrelay > /dev/null 2>&1; then
+    echo "[*] Mengunduh isc-dhcp-relay..."
+    apt-get update && apt-get install -y isc-dhcp-relay
+fi
+
+# 6. Konfigurasi /etc/default/isc-dhcp-relay
+cat << 'RELAY_CONF' > /etc/default/isc-dhcp-relay
+SERVERS="192.238.4.10"
+INTERFACES="eth2 eth3 eth4"
+OPTIONS=""
+RELAY_CONF
+
+# 7. Jalankan Service DHCP Relay
+service isc-dhcp-relay restart || /etc/init.d/isc-dhcp-relay restart || true
+
+echo "=== [JICHI] Setup Berhasil Selesai ==="
+EOF
+
+chmod +x /root/jichi-config.sh
+
+# Daftarkan ke .profile dan .bashrc agar OTOMATIS RUNNING SAAT REBOOT
+grep -qxF '/root/jichi-config.sh' /root/.profile || echo '/root/jichi-config.sh' >> /root/.profile
+grep -qxF '/root/jichi-config.sh' /root/.bashrc || echo '/root/jichi-config.sh' >> /root/.bashrc
+
+# Jalankan script sekarang
+/root/jichi-config.sh
+```
+
+Verifikasi Langkah 1:
+
+```
+ps aux | grep dhcrelay
+```
+Pastikan terlihat proses dhcrelay berjalan mengarah ke 192.238.4.10.
+
+<img width="1060" height="121" alt="image" src="https://github.com/user-attachments/assets/8980c94a-e1e3-4ff5-b21b-9987fd4a894b" />
+
+### Langkah 2: Pengujian 
+
+1. Uji DHCP Relay di klien Network 2 dan Network 3
+
+   Itadori (Network 2) & Ino (Network 3):
+
+   ```
+    udhcpc -i eth0 -q
+   ```
+   <img width="985" height="144" alt="image" src="https://github.com/user-attachments/assets/ebacfee1-73c1-4a03-8f25-c643e9aca90e" />
+   
+   <img width="1022" height="141" alt="image" src="https://github.com/user-attachments/assets/1ed063e1-1098-4019-8cf9-126786eedc17" />
+
+   Cek IP yang diterima:
+
+   ```
+    ip -br addr
+    ip route
+   ```
+
+   <img width="988" height="251" alt="image" src="https://github.com/user-attachments/assets/32c8c958-f5e0-4039-a51c-acad3571f48d" />
+
+   <img width="1032" height="249" alt="image" src="https://github.com/user-attachments/assets/523eb783-fb33-4709-a39a-190e4f28eb1f" />
+
+2. Cek record lease di DHCP Server (Tengen)
+
+   ```
+    cat /var/lib/dhcp/dhcpd.leases
+   ```
+
+   <img width="1058" height="627" alt="image" src="https://github.com/user-attachments/assets/c58a229b-234d-4500-8029-525371ae724f" />
+
+## Soal 4: DHCP Class & Dual Pool di Node
+
+| Nama Node | Kelompok / Class | MAC Address | Rentang IP Pool |
+|---|---|---|---|
+| **itadori** | Dev (`pool1_dev`) | `02:42:ba:30:f3:00` | `192.238.2.10` – `192.238.2.35` |
+| **fushiguro** | Dev (`pool1_dev`) | `02:42:93:96:61:00` | `192.238.2.10` – `192.238.2.35` |
+| **zenin** | Support (`pool2_support`) | `02:42:02:87:12:00` | `192.238.2.70` – `192.238.2.95` |
+| **okkotsu** | Support (`pool2_support`) | `02:42:89:e7:e4:00` | `192.238.2.70` – `192.238.2.95` |
+
+### Langkah 1: Eksekusi script di Node Tengen
+
+```
+cat << 'EOF' > /root/tengen-dhcp.sh
+#!/bin/sh
+set -eu
+
+echo "=== [TENGEN] Mengonfigurasi DHCP Server dengan Class MAC Address ==="
+
+cat << 'DEFAULT_CONF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+DEFAULT_CONF
+
+cat << 'DHCPD_CONF' > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+option domain-name-servers 192.238.1.2, 192.238.1.3;
+
+# -------------------------------------------------------------
+# Kelas Client berdasarkan MAC Address
+# -------------------------------------------------------------
+class "pool1_dev" {
+    match hardware;
+}
+subclass "pool1_dev" 1:02:42:ba:30:f3:00;
+subclass "pool1_dev" 1:02:42:93:96:61:00;
+
+class "pool2_support" {
+    match hardware;
+}
+subclass "pool2_support" 1:02:42:02:87:12:00;
+subclass "pool2_support" 1:02:42:89:e7:e4:00;
+
+# -------------------------------------------------------------
+# Network 4: Data Center (Subnet Lokal Tengen)
+# -------------------------------------------------------------
+subnet 192.238.4.0 netmask 255.255.255.0 {
+    option routers 192.238.4.1;
+    option broadcast-address 192.238.4.255;
+}
+
+# -------------------------------------------------------------
+# Network 2: Scope Divisi A (Dual Pool dengan Class)
+# -------------------------------------------------------------
+subnet 192.238.2.0 netmask 255.255.255.0 {
+    option routers 192.238.2.1;
+    option broadcast-address 192.238.2.255;
+
+    # Pool 1: Dev (Itadori & Fushiguro)
+    pool {
+        allow members of "pool1_dev";
+        range 192.238.2.10 192.238.2.35;
+    }
+
+    # Pool 2: Support (Zenin & Okkotsu)
+    pool {
+        allow members of "pool2_support";
+        range 192.238.2.70 192.238.2.95;
+    }
+}
+
+# -------------------------------------------------------------
+# Network 3: Scope Divisi B
+# -------------------------------------------------------------
+subnet 192.238.3.0 netmask 255.255.255.0 {
+    range 192.238.3.10 192.238.3.100;
+    option routers 192.238.3.1;
+    option broadcast-address 192.238.3.255;
+}
+DHCPD_CONF
+
+# Validasi sintaks
+/usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
+
+# Restart Service
+service isc-dhcp-server restart || /etc/init.d/isc-dhcp-server restart || true
+
+echo "=== [TENGEN] Setup Soal 4 Selesai ==="
+EOF
+
+chmod +x /root/tengen-dhcp.sh
+
+# Daftarkan ke file startup agar otomatis running saat restart
+grep -qxF '/root/tengen-dhcp.sh' /root/.profile || echo '/root/tengen-dhcp.sh' >> /root/.profile
+grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >> /root/.bashrc
+
+# Eksekusi script
+/root/tengen-dhcp.sh
+```
+
+### Langkah 2: Pengujian di Divisi A 
+
+1. Di itadori atau fushiguro:
+
+   ```
+    udhcpc -i eth0 -q
+    ip -br addr
+   ```
+   Harus menerima IP di rentang 192.238.2.10–192.238.2.35.
+
+   <img width="989" height="302" alt="image" src="https://github.com/user-attachments/assets/0f66b4ed-9cac-4a27-b253-57959c62c9f2" />
+
+   <img width="991" height="300" alt="image" src="https://github.com/user-attachments/assets/3b624427-24e1-4f14-b6d3-9a8f10d1a9ec" />
+
+
+2. Di zenin atau okkotsu:
+
+   ```
+    udhcpc -i eth0 -q
+    ip -br addr
+   ```
+   Harus menerima IP di rentang 192.238.2.70–192.238.2.95.
+
+   <img width="979" height="303" alt="image" src="https://github.com/user-attachments/assets/0a09cecd-6725-4913-8ea2-d6bc769c2d78" />
+
+   <img width="987" height="294" alt="image" src="https://github.com/user-attachments/assets/9edd683d-1495-4383-abb7-4c1a3d69251b" />
+
+
+
 
