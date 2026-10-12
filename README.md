@@ -53,37 +53,48 @@ Asumsi prefix kelompok adalah `192.238`. Semua interface internal menggunakan su
 Gunakan script ini ke file /root/jichi-config.sh
 
 ```
-# Ambil alamat WAN dari NAT
-dhclient eth0
+cat << 'EOF' > /root/jichi-config.sh
+#!/bin/sh
+set -eu
 
-# Tetapkan alamat gateway untuk empat network
-ip addr replace 192.238.1.1/24 dev eth1
-ip addr replace 192.238.2.1/24 dev eth2
-ip addr replace 192.238.3.1/24 dev eth3
-ip addr replace 192.238.4.1/24 dev eth4
+echo "=== [JICHI] Mengonfigurasi Router & Gateway ==="
 
+# 1. Nyalakan seluruh interface (eth0 - eth4)
 ip link set eth0 up
 ip link set eth1 up
 ip link set eth2 up
 ip link set eth3 up
 ip link set eth4 up
 
-# Aktifkan IPv4 forwarding
-sysctl -w net.ipv4.ip_forward=1
+# 2. Set IP Statis WAN (eth0) langsung ke Subnet NAT GNS3 (Hanya pakai perintah 'ip' bawaan Linux)
+ip addr replace 192.168.122.100/24 dev eth0
+ip route replace default via 192.168.122.1
+printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
 
-# Izinkan trafik diteruskan antara jaringan internal dan WAN
-iptables -A FORWARD -i eth1 -o eth0 -j ACCEPT
-iptables -A FORWARD -i eth2 -o eth0 -j ACCEPT
-iptables -A FORWARD -i eth3 -o eth0 -j ACCEPT
-iptables -A FORWARD -i eth4 -o eth0 -j ACCEPT
-iptables -A FORWARD -i eth0 -o eth1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A FORWARD -i eth0 -o eth2 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A FORWARD -i eth0 -o eth3 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A FORWARD -i eth0 -o eth4 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# 3. Tetapkan Alamat IP Gateway internal untuk Network 1 - 4
+ip addr replace 192.238.1.1/24 dev eth1
+ip addr replace 192.238.2.1/24 dev eth2
+ip addr replace 192.238.3.1/24 dev eth3
+ip addr replace 192.238.4.1/24 dev eth4
 
-# NAT alamat dari seluruh jaringan internal saat keluar melalui WAN
-iptables -t nat -A POSTROUTING -s 192.238.0.0/16 -o eth0 -j MASQUERADE
+# 4. Aktifkan IPv4 Forwarding
+sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
+# 5. Konfigurasi Source NAT (MASQUERADE)
+iptables -F
+iptables -t nat -F
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+echo "=== [JICHI] Konfigurasi Berhasil Disetup ==="
+EOF
+
+chmod +x /root/jichi-config.sh
+
+# Tambahkan ke .bashrc agar PERMANEN & otomatis jalan saat container restart
+grep -qxF '/root/jichi-config.sh' /root/.bashrc || echo '/root/jichi-config.sh' >> /root/.bashrc
+
+# Jalankan sekarang
+/root/jichi-config.sh
 ```
 
 Lalu atur file permissionnya:
@@ -96,7 +107,7 @@ chmod +x /root/jichi-config.sh
 Agar fowarding tetap aktif setelah di reboot, simpan pengaturannya: 
 
 ```
-echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-jichi-router.conf
+echo '/root/jichi-config.sh' >> /root/.profile
 ```
 
 ### Langkah 2: Tetapkan IP host infrastruktur
@@ -104,6 +115,7 @@ echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-jichi-router.conf
 Gunakan script ini untuk node selain jichi di network 1 dan 4. Di script tersebut setiap node telah ditetapkan IP nya dan bisa diterapkan ke setiap node agar mengurangi pembuatan script yang hampir sama. Simpan di `/root/node-config.sh`. lalu `chmod +x /root/node-config.sh`.
 
 ```
+cat << 'EOF' > /root/node-config.sh
 #!/bin/sh
 set -eu
 
@@ -120,10 +132,11 @@ set_static_ip() {
     printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
 }
 
-# Nameserver awal sesuai ketentuan persiapan tugas
+# DNS Resolver awal untuk persiapan instalasi paket
 printf 'nameserver 192.168.122.1\n' > /etc/resolv.conf
 
 case "$NODE" in
+    # --- Network 1 (DMZ) ---
     utahime)
         set_static_ip 192.238.1.2 192.238.1.1
         ;;
@@ -134,14 +147,16 @@ case "$NODE" in
         set_static_ip 192.238.1.4 192.238.1.1
         ;;
 
+    # --- Network 4 (Data Center) ---
     tengen)
+        # Sesuai instruksi soal No. 2 (192.238.4.10)
+        set_static_ip 192.238.4.10 192.238.4.1
+        ;;
+    maki)
         set_static_ip 192.238.4.2 192.238.4.1
         ;;
     geto)
         set_static_ip 192.238.4.3 192.238.4.1
-        ;;
-    maki)
-        set_static_ip 192.238.4.10 192.238.4.1
         ;;
     panda)
         set_static_ip 192.238.4.11 192.238.4.1
@@ -162,20 +177,19 @@ case "$NODE" in
         set_static_ip 192.238.4.21 192.238.4.1
         ;;
 
+    # --- Network 3 (Fixed Address) ---
     kugisaki)
-        # Fixed address manual, di luar rentang DHCP yang direncanakan
         set_static_ip 192.238.3.50 192.238.3.1
         ;;
 
+    # --- Client DHCP (Divisi A & B) ---
     itadori|fushiguro|zenin|okkotsu|ino|kusakabe|miwa)
-        # Klien DHCP; lease dan pool ditentukan oleh konfigurasi DHCP server
         ip link set "$IFACE" up
-        udhcpc -i "$IFACE" -q
         ;;
 
     jichi)
-        echo "Untuk jichi, jalankan /root/jichi-config.sh"
-        exit 1
+        echo "Untuk jichi, gunakan script /root/jichi-config.sh"
+        exit 0
         ;;
 
     *)
@@ -184,183 +198,162 @@ case "$NODE" in
         ;;
 esac
 
-echo "Konfigurasi untuk $NODE selesai."
-ip -br addr
-ip route
+echo "Konfigurasi $NODE selesai."
+EOF
+
+chmod +x /root/node-config.sh
 ```
 
-Jalankan di masing-masing node:
+Agar bisa otomatis ter boot ketika restart daftarkan ke /root/.bashrc dan /root/.profile:
 
 ```
+# Tambahkan ke .bashrc dan .profile
+grep -qxF '/root/node-config.sh' /root/.bashrc || echo '/root/node-config.sh' >> /root/.bashrc
+grep -qxF '/root/node-config.sh' /root/.profile || echo '/root/node-config.sh' >> /root/.profile
+
+# Jalankan script-nya sekarang
 /root/node-config.sh
 ```
 
-Utahime:   
-<img width="990" height="245" alt="image" src="https://github.com/user-attachments/assets/8f220f99-1991-405d-b305-f5774b65534e" />
+## Langkah 3: Pengujian di node Tengen
 
-Shoko:  
-<img width="1021" height="247" alt="image" src="https://github.com/user-attachments/assets/3204942c-4ef1-4f34-9cba-cce08e63801e" />
-
-Gojo:  
-<img width="1018" height="250" alt="image" src="https://github.com/user-attachments/assets/2361be30-a2ac-4cd5-9ee4-d3e81513c288" />
-
-Tengen:  
-<img width="991" height="242" alt="image" src="https://github.com/user-attachments/assets/b1381f36-ae27-4a79-9769-c24acdb09199" />
-
-Yaga:  
-<img width="987" height="242" alt="image" src="https://github.com/user-attachments/assets/c8b6d667-86ed-40b7-83b9-ee6c73f46a2b" />
-
-Maki:  
-<img width="1025" height="247" alt="image" src="https://github.com/user-attachments/assets/6993bccc-889b-4145-9952-972299b13a28" />
-
-Geto:  
-<img width="1024" height="242" alt="image" src="https://github.com/user-attachments/assets/60b19ffc-2d92-4d76-9827-529eb489bef1" />
-
-Panda:  
-<img width="1024" height="246" alt="image" src="https://github.com/user-attachments/assets/5c3a87b8-960c-4952-a910-165f826106d7" />
-
-Nanami:  
-<img width="1027" height="246" alt="image" src="https://github.com/user-attachments/assets/d80bbb3e-49b1-44b6-865e-6ea4f45df848" />
-
-Todo: 
-<img width="1012" height="244" alt="image" src="https://github.com/user-attachments/assets/d7d5c071-90e5-4e54-ba42-7f3afa4e6fa3" />
-
-Kirara:  
-<img width="986" height="243" alt="image" src="https://github.com/user-attachments/assets/0805afa5-7978-42a6-af05-a49cd4059527" />
-
-Inumaki:  
-<img width="984" height="244" alt="image" src="https://github.com/user-attachments/assets/ae6dcd4e-9b8c-4d6f-a17c-e780ef5adb4a" />
-
-
-## Langkah 3: Pengujian 
-
-1. Pengujian di Jichi
+1. Cek IP & Default Route:
 
    ```
     ip -br addr
     ip route
-    sysctl net.ipv4.ip_forward
-    iptables -t nat -L POSTROUTING -n -v
    ```
 
-   <img width="1062" height="612" alt="image" src="https://github.com/user-attachments/assets/8a9a4573-2270-4f4c-8fe3-8e0b18f52b6c" />
+   <img width="1003" height="249" alt="image" src="https://github.com/user-attachments/assets/8d006b5d-8134-4b9c-8610-43e0de1c3f8e" />
 
+2. Cek koneksi Internet 
     ```
-    ping -c 3 192.168.122.1
-    ping -c 3 1.1.1.1
+    ping -c 2 8.8.8.8
+    ping -c 2 deb.debian.org
     ```
-    <img width="923" height="493" alt="image" src="https://github.com/user-attachments/assets/078bd472-0817-4cab-b919-1feda247cef2" />
-
-2. Uji gateaway setiap host
-
-   ```
-    ip -br addr
-    ip route
-    ping -c 3 <IP-gateway>
-   ```
-
-   <img width="987" height="488" alt="image" src="https://github.com/user-attachments/assets/d003b399-b73f-4ce1-8df4-a3fdeac5c442" />
-
-3. Uji akses eksternal dari host
-
-   ```
-    ping -c 3 1.1.1.1
-    getent hosts deb.debian.org
-   ```
-
-   <img width="890" height="308" alt="image" src="https://github.com/user-attachments/assets/013df6bd-d7da-4ada-942a-6cde292121c0" />
-
+    <img width="1058" height="436" alt="image" src="https://github.com/user-attachments/assets/5f4291d9-2774-41ce-89a9-d00d58a87018" />
 
 ## Soal 2: Mengonfigurasikan Tengen agar dapat mengalokasikan alamat yang membutuhkan konfigurasi dinamis 
-
-Karena di soal 2 Tengen diminta untuk berada di IP 192.238.4.10 perlu adanya perubahan dengan IP sebelumnya.
-
-```
-ip addr replace 192.238.4.10/24 dev eth0
-ip addr del 192.238.4.2/24 dev eth0
-```
-
-Script diatas merubah IP Tengen yang awalnya 192.238.4.2 menjadi 192.238.4.10 sesuai dengan yang diminta soal.  
-
-<img width="1051" height="249" alt="image" src="https://github.com/user-attachments/assets/f95bbb73-760c-4e7e-af8c-9fef0f67cf48" />
-
-Lalu karena IP sekarang bentrok dengan IP dari node Maki maka di IP node Maki perlu dirubah ke IP kosong disini saya memilih 192.238.4.22.
-
-```
-ip addr replace 192.238.4.22/24 dev eth0
-ip addr del 192.238.4.10/24 dev eth0
-```
-<img width="1053" height="245" alt="image" src="https://github.com/user-attachments/assets/3d1a0721-ecd4-4308-b4b5-9ec77cd1b7cd" />
 
 ### Langkah 1: Pasang dan konfigurasi DHCP server di Tengen
 
 ```
-apt-get update
-apt-get install -y isc-dhcp-server
+apt-get update && apt-get install -y isc-dhcp-server
 ```
 
-### Langkah 2: Validasi dan jalankan service 
+<img width="1063" height="645" alt="image" src="https://github.com/user-attachments/assets/8f88c97e-a2aa-4a85-92b1-2b80afbfc39a" />
+
+### Langkah 2: Konfigurasi DHCP Server (`/root/tengen-dhcp.sh`);
 
 ```
-dhcpd -t -4 -cf /etc/dhcp/dhcpd.conf
-```
-<img width="871" height="228" alt="image" src="https://github.com/user-attachments/assets/7aa8bffe-c704-4f77-8db1-a1b83af82494" />
+cat << 'EOF' > /root/tengen-dhcp.sh
+#!/bin/sh
+set -eu
 
-Restart dan cek service:
+echo "=== Mengonfigurasi isc-dhcp-server di Tengen ==="
+
+# 1. Atur interface listening ke eth0
+cat << 'DEFAULT_CONF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+DEFAULT_CONF
+
+# 2. Buat konfigurasi utama DHCP Server
+cat << 'DHCPD_CONF' > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+# DNS Name Server
+option domain-name-servers 192.238.1.2, 192.238.1.3;
+
+# -------------------------------------------------------------
+# Network 4: Data Center (192.238.4.0/24)
+# Subnet lokal tempat tengen berada (192.238.4.10)
+# Wajib dideklarasikan TANPA pool dinamis (tanpa range)
+# agar tidak muncul error "No subnet declaration for eth0"
+# -------------------------------------------------------------
+subnet 192.238.4.0 netmask 255.255.255.0 {
+    option routers 192.238.4.1;
+    option broadcast-address 192.238.4.255;
+}
+
+# -------------------------------------------------------------
+# Network 2: Scope Divisi A (192.238.2.0/24)
+# -------------------------------------------------------------
+subnet 192.238.2.0 netmask 255.255.255.0 {
+    range 192.238.2.10 192.238.2.100;
+    option routers 192.238.2.1;
+    option broadcast-address 192.238.2.255;
+}
+
+# -------------------------------------------------------------
+# Network 3: Scope Divisi B (192.238.3.0/24)
+# -------------------------------------------------------------
+subnet 192.238.3.0 netmask 255.255.255.0 {
+    range 192.238.3.10 192.238.3.100;
+    option routers 192.238.3.1;
+    option broadcast-address 192.238.3.255;
+}
+DHCPD_CONF
+
+# 3. Uji Sintaks Konfigurasi
+/usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
+
+# 4. Restart Service DHCP Server
+service isc-dhcp-server restart || /etc/init.d/isc-dhcp-server restart || true
+
+echo "=== Konfigurasi Tengen Selesai ==="
+EOF
+
+chmod +x /root/tengen-dhcp.sh
+/root/tengen-dhcp.sh
+```
+
+<img width="1064" height="494" alt="image" src="https://github.com/user-attachments/assets/07578645-6c68-48d5-a646-f903db0083ef" />
+
+Agar script diatas bisa berjalan otomatis saat ter reboot:
 
 ```
-service isc-dhcp-server restart
-service isc-dhcp-server status
+# Tambahkan perintah restart service DHCP di akhir file /root/node-config.sh
+echo 'service isc-dhcp-server restart || /etc/init.d/isc-dhcp-server restart || true' >> /root/node-config.sh
 ```
 
-<img width="767" height="140" alt="image" src="https://github.com/user-attachments/assets/25c49a6a-d17a-4ad3-9336-09334071c529" />
+Bagaimana Cara Kerja Alurnya Saat Reboot?
+1. Saat container tengen di-restart, /root/.profile / /root/.bashrc akan mengeksekusi /root/node-config.sh.
+2. Script /root/node-config.sh mengatur IP statis 192.238.4.10 dan gateway 192.238.4.1.
+3. Setelah IP aktif, baris tambahan di atas akan langsung menyalakan daemon isc-dhcp-server.   
 
 ### Langkah 3: Pengujian 
 
-Pastikan alamat dan interface sudah sesuai dengan ketentuan yang ada di soal:
+1. Uji Sintaks File Configuration:
 
 ```
-ip -4 addr show dev eth0
-grep '^INTERFACESv4' /etc/default/isc-dhcp-server
-```
-<img width="1060" height="198" alt="image" src="https://github.com/user-attachments/assets/7dda26ee-9522-4468-bf7b-e5596721debb" />
-
-Jalankan pengujian relay di jichi untuk memastikan bahwa 
-
-```
-apt-get install -y isc-dhcp-relay
-nano /etc/default/isc-dhcp-relay
+/usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
 ```
 
-Atur nilai di file /etc/default/isc-dhcp-relay menjadi 
+<img width="1063" height="229" alt="image" src="https://github.com/user-attachments/assets/4978f3de-ece0-4372-a0f5-60386cc99114" />
+
+Terlihat bahwa tidak ada error
+
+2. Cek Log / Status Service:
 
 ```
-SERVERS="192.238.4.10"
-INTERFACES="eth2 eth3"
-OPTIONS=""
+service isc-dhcp-server status
 ```
 
-Simpan lalu restard dan cek relay: 
+<img width="773" height="92" alt="image" src="https://github.com/user-attachments/assets/853186bb-35a5-49be-9ba7-35dd4671fa9d" />
 
 ```
-service isc-dhcp-relay restart
-service isc-dhcp-relay status
+ps aux | grep dhcpd
 ```
+Harus muncul baris proses `/usr/sbin/dhcpd` yang sedang berjalan.
 
-Lihat apakah service relay telah berjalan: 
+<img width="1062" height="118" alt="image" src="https://github.com/user-attachments/assets/6da4a23e-4398-420d-9367-8374eba7a181" />
 
 ```
-pgrep -a dhcrelay
+/usr/sbin/dhcpd -f -d eth0
 ```  
-<img width="884" height="63" alt="image" src="https://github.com/user-attachments/assets/1ae17fc7-fff6-4dc5-9b60-18c4be281992" />
+<img width="1067" height="370" alt="image" src="https://github.com/user-attachments/assets/52eda09a-112a-43cb-b3ad-1cfa94384259" />
 
-Uji di network 2 itadori: 
-
-```
-dhclient -v eth0
-ip -4 addr show dev eth0
-ip route
-```
-
-<img width="933" height="579" alt="image" src="https://github.com/user-attachments/assets/4a45680c-c3c6-4248-b250-189092e73f26" />
 
