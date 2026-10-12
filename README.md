@@ -196,5 +196,18 @@ Jalankan di masing-masing node:
 /root/node-config.sh
 ```
 
+Utahime:   
+<img width="990" height="245" alt="image" src="https://github.com/user-attachments/assets/8f220f99-1991-405d-b305-f5774b65534e" />
+
+Shoko:  
+<img width="1021" height="247" alt="image" src="https://github.com/user-attachments/assets/3204942c-4ef1-4f34-9cba-cce08e63801e" />
+
+Gojo:  
+<img width="1018" height="250" alt="image" src="https://github.com/user-attachments/assets/2361be30-a2ac-4cd5-9ee4-d3e81513c288" />
+
+
+
+
+
 
 
