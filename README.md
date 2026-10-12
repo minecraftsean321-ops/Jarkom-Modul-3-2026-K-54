@@ -315,4 +315,52 @@ service isc-dhcp-server status
 
 <img width="767" height="140" alt="image" src="https://github.com/user-attachments/assets/25c49a6a-d17a-4ad3-9336-09334071c529" />
 
+### Langkah 3: Pengujian 
+
+Pastikan alamat dan interface sudah sesuai dengan ketentuan yang ada di soal:
+
+```
+ip -4 addr show dev eth0
+grep '^INTERFACESv4' /etc/default/isc-dhcp-server
+```
+<img width="1060" height="198" alt="image" src="https://github.com/user-attachments/assets/7dda26ee-9522-4468-bf7b-e5596721debb" />
+
+Jalankan pengujian relay di jichi untuk memastikan bahwa 
+
+```
+apt-get install -y isc-dhcp-relay
+nano /etc/default/isc-dhcp-relay
+```
+
+Atur nilai di file /etc/default/isc-dhcp-relay menjadi 
+
+```
+SERVERS="192.238.4.10"
+INTERFACES="eth2 eth3"
+OPTIONS=""
+```
+
+Simpan lalu restard dan cek relay: 
+
+```
+service isc-dhcp-relay restart
+service isc-dhcp-relay status
+```
+
+Lihat apakah service relay telah berjalan: 
+
+```
+pgrep -a dhcrelay
+```  
+<img width="884" height="63" alt="image" src="https://github.com/user-attachments/assets/1ae17fc7-fff6-4dc5-9b60-18c4be281992" />
+
+Uji di network 2 itadori: 
+
+```
+dhclient -v eth0
+ip -4 addr show dev eth0
+ip route
+```
+
+<img width="933" height="579" alt="image" src="https://github.com/user-attachments/assets/4a45680c-c3c6-4248-b250-189092e73f26" />
 
