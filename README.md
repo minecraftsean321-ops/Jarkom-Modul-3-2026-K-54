@@ -57,10 +57,10 @@ Gunakan script ini ke file /root/jichi-config.sh
 dhclient eth0
 
 # Tetapkan alamat gateway untuk empat network
-ip addr add 192.238.1.1/24 dev eth1
-ip addr add 192.238.2.1/24 dev eth2
-ip addr add 192.238.3.1/24 dev eth3
-ip addr add 192.238.4.1/24 dev eth4
+ip addr replace 192.238.1.1/24 dev eth1
+ip addr replace 192.238.2.1/24 dev eth2
+ip addr replace 192.238.3.1/24 dev eth3
+ip addr replace 192.238.4.1/24 dev eth4
 
 ip link set eth0 up
 ip link set eth1 up
