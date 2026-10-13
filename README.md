@@ -634,7 +634,7 @@ MAC_INO="02:42:a5:41:3b:00"
 MAC_KUSAKABE="02:42:89:2f:5f:00"
 MAC_MIWA="02:42:ea:de:c4:00"
 
-DOMAIN_NAME="jarkom.com"          # Sesuaikan domain kelompokmu jika ada
+DOMAIN_NAME="jarkom.com"
 # =========================================================================
 
 cat << 'DEFAULT_CONF' > /etc/default/isc-dhcp-server
@@ -649,6 +649,7 @@ authoritative;
 
 # DHCP Options Global (Soal 5)
 option domain-name-servers 192.238.1.2, 192.238.1.3;
+option domain-name "${DOMAIN_NAME}";
 option domain-search "${DOMAIN_NAME}";
 
 # -------------------------------------------------------------
@@ -739,16 +740,16 @@ DHCPD_CONF
 # Restart Service
 service isc-dhcp-server restart || /etc/init.d/isc-dhcp-server restart || true
 
-echo "=== [TENGEN] Setup Soal 5 Selesai ==="
+echo "=== [TENGEN] Setup Berhasil Diperbarui ==="
 EOF
 
 chmod +x /root/tengen-dhcp.sh
 
-# Otomatisasi Boot / Restart
+# Garansi Otomatis Reboot
 grep -qxF '/root/tengen-dhcp.sh' /root/.profile || echo '/root/tengen-dhcp.sh' >> /root/.profile
 grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >> /root/.bashrc
 
-# Eksekusi script
+# Jalankan script
 /root/tengen-dhcp.sh
 
 ```
@@ -784,7 +785,9 @@ grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >>
 
    Menampilkan nameserver 192.238.1.2, nameserver 192.238.1.3, dan search jarkom.com
 
-   <img width="403" height="83" alt="image" src="https://github.com/user-attachments/assets/63363b2d-84a3-4928-82c0-c2f843c2398a" />
+   <img width="447" height="109" alt="image" src="https://github.com/user-attachments/assets/0f12dc13-cad0-4c74-afd8-e16164f2f6b0" />
+
+
 
 
 
