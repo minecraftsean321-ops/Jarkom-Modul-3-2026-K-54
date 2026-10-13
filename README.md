@@ -1535,3 +1535,216 @@ Client di Network 2 dan Network 3 mendapat lease dari server di Network 4 (`192.
 1. `dhcrelay` di `jichi` menerima broadcast client pada `eth2` / `eth3`.
 2. Relay meneruskan paket ke `192.238.4.10` melalui `eth4`.
 3. `dhcpd` di `tengen` memilih scope berdasarkan `giaddr` dan membalas lewat relay.
+
+# Laporan Soal 11: DNS Master–Slave dengan BIND9 (jujutsu.k54.com)
+ 
+## 1. Soal
+ 
+> Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada **utahime** sebagai **DNS Master** dan **shoko** sebagai **DNS Slave** untuk mengelola domain **jujutsu.<xxxx>.com**. Atur SOA record, NS delegasi untuk kedua server, dan terapkan **allow-transfer** dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query **dig** ke kedua server dari salah satu client.
+ 
+Dengan `<xxxx>` = `k54`, domain yang dikelola adalah **`jujutsu.k54.com`**.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Domain | `jujutsu.k54.com` |
+| DNS Master | `utahime` (`192.238.1.2`) |
+| DNS Slave | `shoko` (`192.238.1.3`) |
+| Software | BIND9 (`named`) |
+| Client uji | `itadori` (Network 2), `dig` 9.20.26 |
+| Serial awal | `2026101301` (sama di Master dan Slave) |
+| Serial setelah dinaikkan | `2026101302` (Slave ikut berubah otomatis) |
+| `allow-transfer` | `{ 192.238.1.3; }` (hanya shoko) |
+ 
+Alamat `192.238.1.2` dan `192.238.1.3` sama dengan DNS server yang dibagikan DHCP kepada client (Soal 5 dan 7). Pada topologi GNS3, `utahime` dan `shoko` berada pada `Switch1` yang terhubung ke `eth1` jichi.
+ 
+ 
+## 4. Konfigurasi DNS Master (utahime)
+ 
+Skrip: `/root/utahime-dns.sh`
+ 
+### 4.1 Deklarasi zona (`/etc/bind/named.conf.local`)
+ 
+```conf
+zone "jujutsu.k54.com" {
+    type master;
+    file "/etc/bind/jujutsu/jujutsu.k54.com";
+    allow-transfer { 192.238.1.3; };
+    also-notify { 192.238.1.3; };
+};
+```
+ 
+| Direktif | Fungsi |
+|---|---|
+| `type master` | utahime adalah sumber data zona |
+| `allow-transfer { 192.238.1.3; }` | Hanya shoko yang boleh mengambil file zona |
+| `also-notify { 192.238.1.3; }` | Memberi tahu shoko begitu zona berubah, sehingga sinkronisasi tidak menunggu interval refresh |
+ 
+### 4.2 File zona (`/etc/bind/jujutsu/jujutsu.k54.com`)
+ 
+```dns
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k54.com. root.jujutsu.k54.com. (
+                        2026101301 ; Serial YYYYMMDDNN
+                            604800 ; Refresh (1 minggu)
+                             86400 ; Retry (1 hari)
+                           2419200 ; Expire (4 minggu)
+                            604800 ) ; Negative Cache TTL
+ 
+; Name Server Delegation (NS Record)
+@       IN      NS      utahime.jujutsu.k54.com.
+@       IN      NS      shoko.jujutsu.k54.com.
+ 
+; A Record untuk Name Server
+utahime IN      A       192.238.1.2
+shoko   IN      A       192.238.1.3
+```
+ 
+### 4.3 Penjelasan SOA
+ 
+| Field | Nilai | Arti |
+|---|---|---|
+| MNAME | `utahime.jujutsu.k54.com.` | Name server utama (Master) |
+| RNAME | `root.jujutsu.k54.com.` | Kontak administrator |
+| Serial | `2026101301` | Versi zona, format `YYYYMMDDNN` (13 Okt 2026, revisi 01) |
+| Refresh | 604800 | Slave mengecek serial setiap 1 minggu jika tidak ada NOTIFY |
+| Retry | 86400 | Interval ulang jika refresh gagal |
+| Expire | 2419200 | Slave berhenti menjawab jika Master tidak terjangkau 4 minggu |
+| Negative Cache TTL | 604800 | Lama cache jawaban negatif |
+ 
+### 4.4 NS delegasi untuk kedua server
+ 
+Terdapat dua record `NS` (`utahime` dan `shoko`) beserta `A` record untuk keduanya, sehingga kedua server terdaftar sebagai name server resmi zona.
+ 
+### 4.5 Validasi dan restart
+ 
+Skrip menjalankan `named-checkconf` dan `named-checkzone jujutsu.k54.com /etc/bind/jujutsu/jujutsu.k54.com`, lalu `rndc reload` (cadangan: `pkill -9 named` lalu `named -u bind`). Skrip juga didaftarkan ke `/root/.profile` dan `/root/.bashrc` agar otomatis berjalan setelah node dinyalakan ulang.
+ 
+## 5. Konfigurasi DNS Slave (shoko)
+ 
+Skrip: `/root/shoko-dns.sh`
+ 
+```conf
+zone "jujutsu.k54.com" {
+    type slave;
+    file "/var/lib/bind/jujutsu.k54.com.saved";
+    masters { 192.238.1.2; };
+};
+```
+ 
+| Direktif | Fungsi |
+|---|---|
+| `type slave` | shoko menerima salinan zona dari Master |
+| `masters { 192.238.1.2; }` | Sumber zona adalah utahime |
+| `file ".../jujutsu.k54.com.saved"` | Lokasi file zona hasil transfer di shoko |
+ 
+Skrip menjalankan `named-checkconf`, me-restart BIND9, dan juga didaftarkan ke `.profile` dan `.bashrc` untuk autostart.
+ 
+## 6. Pengujian dari Client `itadori`
+ 
+### 6.1 Query ke DNS Master (`192.238.1.2`)
+ 
+```sh
+dig @192.238.1.2 jujutsu.k54.com SOA +short
+dig @192.238.1.2 jujutsu.k54.com NS
+```
+ 
+Output SOA:
+ 
+```text
+utahime.jujutsu.k54.com. root.jujutsu.k54.com. 2026101301 604800 86400 2419200 604800
+```
+ 
+Header output NS:
+ 
+```text
+; <<>> DiG 9.20.26 <<>> @192.238.1.2 jujutsu.k54.com NS
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 63230
+;; flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 3
+;; WARNING: recursion requested but not available
+```
+
+<img width="538" height="306" alt="Screenshot 2026-10-13 at 23 33 35" src="https://github.com/user-attachments/assets/82684838-0b48-4ec2-89bb-44fb09d9ed26" />
+
+ 
+### 6.2 Query ke DNS Slave (`192.238.1.3`)
+ 
+```sh
+dig @192.238.1.3 jujutsu.k54.com SOA +short
+dig @192.238.1.3 jujutsu.k54.com NS
+```
+ 
+Output SOA:
+ 
+```text
+utahime.jujutsu.k54.com. root.jujutsu.k54.com. 2026101301 604800 86400 2419200 604800
+```
+ 
+Header output NS:
+ 
+```text
+; <<>> DiG 9.20.26 <<>> @192.238.1.3 jujutsu.k54.com NS
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 62683
+;; flags: qr aa rd; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 3
+;; WARNING: recursion requested but not available
+```
+
+<img width="538" height="293" alt="Screenshot 2026-10-13 at 23 36 13" src="https://github.com/user-attachments/assets/46522a6d-7070-4f85-aa80-d79e1c19046b" />
+
+ 
+### 6.3 Perbandingan Master dan Slave (serial awal)
+ 
+| Parameter | Master (`192.238.1.2`) | Slave (`192.238.1.3`) |
+|---|---|---|
+| SOA MNAME | `utahime.jujutsu.k54.com.` | `utahime.jujutsu.k54.com.` |
+| Serial | `2026101301` | `2026101301` |
+| Status | `NOERROR` | `NOERROR` |
+| Flag `aa` (authoritative) | Ada | Ada |
+| Jumlah jawaban NS | 2 | 2 |
+ 
+Flag `aa` pada Slave menunjukkan shoko menjawab sebagai server otoritatif dengan data zona yang sudah ia terima, yaitu zone transfer pertama berhasil. Peringatan `recursion requested but not available` wajar, karena kedua server hanya otoritatif untuk zona ini dan tidak menyediakan rekursi.
+ 
+## 7. Uji Sinkronisasi Otomatis (Kenaikan Serial)
+ 
+### 7.1 Menaikkan serial di utahime
+ 
+```sh
+sed -i 's/2026101301/2026101302/g' /etc/bind/jujutsu/jujutsu.k54.com
+rndc reload || pkill -9 named && named -u bind
+rndc notify jujutsu.k54.com
+```
+ 
+Output:
+ 
+```text
+server reload successful
+zone notify queued
+```
+<img width="524" height="80" alt="Screenshot 2026-10-13 at 23 41 29" src="https://github.com/user-attachments/assets/c891b3f9-6104-48c1-a009-c90be1b26ba8" />
+
+ 
+| Langkah | Fungsi |
+|---|---|
+| `sed -i ...` | Serial `2026101301` menjadi `2026101302` |
+| `rndc reload` | Memuat ulang zona; hasil `server reload successful` |
+| `rndc notify` | Mengirim notifikasi ke shoko; hasil `zone notify queued` |
+ 
+### 7.2 Query ke Slave setelah serial dinaikkan
+ 
+```sh
+dig @192.238.1.3 jujutsu.k54.com SOA +short
+```
+ 
+```text
+utahime.jujutsu.k54.com. root.jujutsu.k54.com. 2026101302 604800 86400 2419200 604800
+```
+<img width="536" height="42" alt="Screenshot 2026-10-13 at 23 41 46" src="https://github.com/user-attachments/assets/c6c59f3e-9d48-43b7-bab0-fd0a519afb90" />
+
+ 
+| Kondisi | Serial di shoko |
+|---|---|
+| Sebelum serial dinaikkan | `2026101301` |
+| Setelah serial dinaikkan dan NOTIFY | **`2026101302`** |
+ 
+Serial di shoko berubah menjadi `2026101302` tanpa menyalin file secara manual, sehingga sinkronisasi zona otomatis (NOTIFY lalu zone transfer terotorisasi oleh `allow-transfer`) terbukti.
