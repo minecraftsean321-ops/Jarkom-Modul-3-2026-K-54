@@ -1052,3 +1052,165 @@ Alamat `192.238.2.x` dan `192.238.3.x` berada pada subnet berbeda, sehingga tida
  
 Tidak ada client yang menerima alamat di luar kebijakan pool-nya. Setiap client Divisi A masuk ke pool sesuai class-nya, dan lease time Divisi B sesuai kebijakan (1800 s untuk short lease, 43200 s untuk long lease).
 
+# Laporan Soal 8: Packet Capture Proses DHCP (DORA)
+ 
+## 1. Soal
+ 
+> Sebelum Curtain dibuka kembali, buktikan bahwa proses pemberian alamat berjalan sesuai protokol. Lakukan packet capture saat salah satu client **Network 2** atau **Network 3** meminta lease baru. Gunakan **tcpdump** pada **tengen** atau jalur menuju Data Center untuk menunjukkan urutan **DHCPDISCOVER → DHCPOFFER → DHCPREQUEST → DHCPACK**. Identifikasi alamat server, alamat yang diberikan, lease time, dan field **giaddr**. Pastikan nilai **giaddr** sesuai dengan interface **jichi** yang menerima request dari subnet client.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Client yang diuji (capture) | `ino` (Network 3), MAC `02:42:a5:41:3b:00` |
+| Client pembanding (log client) | `itadori` (Network 2) |
+| Titik capture | `tengen`, interface `eth0` |
+| Transaction ID (xid) | `0x8a25a829` |
+| Alamat DHCP Server (Server-ID) | `192.238.4.10` |
+| Alamat yang diberikan (Your-IP) | `192.238.3.10` |
+| Lease time | `1800` detik (30 menit) |
+| giaddr | `192.238.3.1` (interface jichi di Network 3) |
+| Jumlah hop relay | `1` |
+ 
+## 3. Langkah Pengujian
+ 
+### Langkah 1: jalankan packet capture di `tengen`
+ 
+```sh
+tcpdump -i eth0 -n -v "port 67 or port 68"
+```
+ 
+Filter `port 67 or port 68` menangkap seluruh trafik DHCP (port 67 untuk server, port 68 untuk client).
+ 
+### Langkah 2: minta lease baru dari client
+ 
+Pada node `ino` (Network 3):
+ 
+```sh
+udhcpc -i eth0 -n
+```
+ 
+Output client:
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.3.10, server 192.238.4.10
+udhcpc: lease of 192.238.3.10 obtained from 192.238.4.10, lease time 1800
+```
+ 
+Sebagai pembanding, hasil yang sama pada node `itadori` (Network 2):
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.2.10, server 192.238.4.10
+udhcpc: lease of 192.238.2.10 obtained from 192.238.4.10, lease time 600
+```
+
+<img width="524" height="69" alt="Screenshot 2026-10-13 at 21 53 21" src="https://github.com/user-attachments/assets/4cb79b3a-90a9-4c51-88f5-7e4af63fdf67" />
+
+ 
+## 4. Urutan Paket Hasil Capture di `tengen`
+ 
+Seluruh paket memiliki `xid 0x8a25a829` dan Client MAC `02:42:a5:41:3b:00`, sehingga terbukti satu transaksi DHCP yang sama.
+ 
+| No | Waktu | Pesan DHCP | Arah (src → dst) | Keterangan |
+|---|---|---|---|---|
+| 1 | (sebelum 21:52:24.436977) | **DISCOVER** | client → broadcast, diteruskan relay | Terlihat di log client: `broadcasting discover` |
+| 2 | 21:52:24.436977 | **OFFER** | `192.238.4.10.67 > 192.238.3.1.67` | Server menawarkan `192.238.3.10` |
+| 3 | 21:52:24.443120 | **REQUEST** | `192.238.4.1.67 > 192.238.4.10.67` | Client meminta `192.238.3.10` |
+| 4 | 21:52:24.444150 | **ACK** | `192.238.4.10.67 > 192.238.3.1.67` | Server mengonfirmasi lease |
+ 
+```mermaid
+sequenceDiagram
+    participant C as ino (client, Net 3)
+    participant J as jichi (relay 192.238.3.1 / 192.238.4.1)
+    participant T as tengen (server 192.238.4.10)
+    C->>J: DHCPDISCOVER (broadcast)
+    J->>T: DHCPDISCOVER (giaddr 192.238.3.1)
+    T->>J: DHCPOFFER (Your-IP 192.238.3.10)
+    J->>C: DHCPOFFER
+    C->>J: DHCPREQUEST (Requested-IP 192.238.3.10)
+    J->>T: DHCPREQUEST (giaddr 192.238.3.1)
+    T->>J: DHCPACK (lease 1800)
+    J->>C: DHCPACK
+```
+ 
+## 5. Detail Setiap Paket
+ 
+### 5.1 DHCPOFFER (21:52:24.436977)
+ 
+```text
+192.238.4.10.67 > 192.238.3.1.67: BOOTP/DHCP, Reply, length 300, hops 1, xid 0x8a25a829
+    Your-IP 192.238.3.10
+    Gateway-IP 192.238.3.1
+    Client-Ethernet-Address 02:42:a5:41:3b:00
+    DHCP-Message (53): Offer
+    Server-ID (54): 192.238.4.10
+    Lease-Time (51): 1800
+    Subnet-Mask (1): 255.255.255.0
+    Default-Gateway (3): 192.238.3.1
+    Domain-Name-Server (6): 192.238.1.2,192.238.1.3
+    Domain-Name (15): "jarkom.com"
+    BR (28): 192.238.3.255
+```
+<img width="537" height="229" alt="Screenshot 2026-10-13 at 21 55 22" src="https://github.com/user-attachments/assets/e00c42d5-65c3-4ffc-83f4-99a303d89df5" />
+
+ 
+### 5.2 DHCPREQUEST (21:52:24.443120)
+ 
+```text
+192.238.4.1.67 > 192.238.4.10.67: BOOTP/DHCP, Request from 02:42:a5:41:3b:00, length 300, hops 1, xid 0x8a25a829
+    Gateway-IP 192.238.3.1
+    Client-Ethernet-Address 02:42:a5:41:3b:00
+    DHCP-Message (53): Request
+    Requested-IP (50): 192.238.3.10
+    Server-ID (54): 192.238.4.10
+    Vendor-Class (60): "udhcp 1.37.0"
+    Client-ID (61): ether 02:42:a5:41:3b:00
+```
+<img width="538" height="243" alt="Screenshot 2026-10-13 at 21 55 34" src="https://github.com/user-attachments/assets/3fe33377-1e01-428e-a411-b90384a863f5" />
+
+ 
+### 5.3 DHCPACK (21:52:24.444150)
+ 
+```text
+192.238.4.10.67 > 192.238.3.1.67: BOOTP/DHCP, Reply, length 300, hops 1, xid 0x8a25a829
+    Your-IP 192.238.3.10
+    Gateway-IP 192.238.3.1
+    Client-Ethernet-Address 02:42:a5:41:3b:00
+    DHCP-Message (53): ACK
+    Server-ID (54): 192.238.4.10
+    Lease-Time (51): 1800
+    Subnet-Mask (1): 255.255.255.0
+    Default-Gateway (3): 192.238.3.1
+    Domain-Name-Server (6): 192.238.1.2,192.238.1.3
+    Domain-Name (15): "jarkom.com"
+    BR (28): 192.238.3.255
+```
+<img width="535" height="231" alt="Screenshot 2026-10-13 at 21 55 52" src="https://github.com/user-attachments/assets/dd7a498c-2301-459f-bdae-37b6f86706f5" />
+
+ 
+## 6. Identifikasi Field yang Diminta
+ 
+| Field | Nilai | Sumber bukti |
+|---|---|---|
+| Alamat server | `192.238.4.10` | `Server-ID (54)` pada Offer, Request, dan ACK; sumber paket Offer/ACK |
+| Alamat yang diberikan | `192.238.3.10` | `Your-IP` pada Offer dan ACK; `Requested-IP (50)` pada Request |
+| Lease time | `1800` detik (30 menit) | `Lease-Time (51)` pada Offer dan ACK |
+| giaddr | `192.238.3.1` | Field `Gateway-IP` pada Offer, Request, dan ACK |
+| Hop relay | `1` | `hops 1` pada seluruh paket |
+ 
+## 7. Validasi giaddr terhadap Interface jichi
+ 
+| Pengecekan | Hasil |
+|---|---|
+| `giaddr` pada paket | `192.238.3.1` |
+| Gateway Network 3 | `192.238.3.1` (`Default-Gateway (3)` dan `default via 192.238.3.1` di client) |
+| Subnet client `ino` | `192.238.3.0/24` |
+| Paket Request dari relay menuju server | Bersumber `192.238.4.1`, yaitu sisi jichi yang menghadap Data Center |
+| Reply server dikirim ke | `192.238.3.1:67`, yaitu alamat giaddr |
+ 
+`giaddr` bernilai `192.238.3.1`, yaitu alamat interface jichi pada subnet client (Network 3). Hal ini sesuai dengan prinsip relay DHCP: relay mengisi `giaddr` dengan alamat interface yang menerima broadcast client, lalu server memilih scope `192.238.3.0/24` berdasarkan nilai itu dan membalas ke alamat tersebut. Pemilihan alamat `192.238.3.10` dari pool Network 3 dan lease time `1800` detik (kebijakan short lease untuk `ino`) menunjukkan server membaca `giaddr` dengan benar.
+
