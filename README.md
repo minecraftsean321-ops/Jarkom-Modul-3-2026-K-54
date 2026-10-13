@@ -885,4 +885,170 @@ Bukti :
 
 **Soal 6 terpenuhi.**
 
+# Laporan Soal 7: Verifikasi Konfigurasi Jaringan Client Divisi A dan B
+ 
+## 1. Soal
+ 
+> Setelah aturan alokasi diterapkan, pastikan setiap client menerima konfigurasi jaringan sesuai wilayahnya: subnet mask **255.255.255.0 (/24)**, gateway dan broadcast address yang benar, DNS **[PREFIX IP].1.2** serta **[PREFIX IP].1.3**, dan domain-search yang ditentukan. Periksa IP address dan routing seluruh client Divisi A dan Divisi B, kemudian cocokkan lease dengan **/var/lib/dhcp/dhcpd.leases** pada **tengen**. Pastikan tidak ada alamat yang bertabrakan atau berada di luar kebijakan pool.
+ 
+Dengan prefix IP `192.238`, DNS yang diharapkan adalah `192.238.1.2` dan `192.238.1.3`, dengan domain-search `jarkom.com`.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Jumlah client diuji | 8 (4 Divisi A, 4 Divisi B) |
+| DHCP Server | `tengen` (`192.238.4.10`) |
+| Subnet mask | `/24` pada seluruh client |
+| Gateway | Sesuai wilayah (`.2.1` untuk Divisi A, `.3.1` untuk Divisi B) |
+| DNS | `192.238.1.2` dan `192.238.1.3` pada seluruh client |
+| Domain-search | `jarkom.com` pada seluruh client |
+| Alamat bertabrakan | Tidak ada (8 IP unik) |
+| Alamat di luar kebijakan pool | Tidak ada |
+ 
+## 3. Metode Pengujian
+ 
+### 3.1 Di setiap node client
+ 
+Dijalankan pada `itadori`, `fushiguro`, `zenin`, `okkotsu`, `ino`, `kusakabe`, `miwa`, dan `kugisaki`:
+ 
+```sh
+# Renew IP Address
+udhcpc -i eth0 -q
+ 
+# Cek IP Address & Netmask
+ip -br addr
+ 
+# Cek Gateway & Routing
+ip route
+ 
+# Cek DNS Server & Search Domain
+cat /etc/resolv.conf
+```
+ 
+### 3.2 Di node tengen
+ 
+```sh
+cat /var/lib/dhcp/dhcpd.leases
+```
+ 
+## 4. Tabel Hasil Verifikasi Seluruh Client
+ 
+| Client | Divisi / Wilayah | MAC Address | IP Address Teralokasi | Subnet Mask | Gateway | DNS Server | Domain Search | Tipe Lease / Pool Policy |
+|---|---|---|---|---|---|---|---|---|
+| **itadori** | Divisi A (Network 2) | `02:42:ba:30:f3:00` | `192.238.2.10` | `/24` (`255.255.255.0`) | `192.238.2.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Dynamic (`pool1_dev`: 10-35) |
+| **fushiguro** | Divisi A (Network 2) | `02:42:93:96:61:00` | `192.238.2.11` | `/24` (`255.255.255.0`) | `192.238.2.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Dynamic (`pool1_dev`: 10-35) |
+| **zenin** | Divisi A (Network 2) | `02:42:02:87:12:00` | `192.238.2.70` | `/24` (`255.255.255.0`) | `192.238.2.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Dynamic (`pool2_support`: 70-95) |
+| **okkotsu** | Divisi A (Network 2) | `02:42:89:e7:e4:00` | `192.238.2.71` | `/24` (`255.255.255.0`) | `192.238.2.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Dynamic (`pool2_support`: 70-95) |
+| **ino** | Divisi B (Network 3) | `02:42:a5:41:3b:00` | `192.238.3.10` | `/24` (`255.255.255.0`) | `192.238.3.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Short Lease (30m / 1800s) |
+| **kusakabe** | Divisi B (Network 3) | `02:42:89:2f:5f:00` | `192.238.3.11` | `/24` (`255.255.255.0`) | `192.238.3.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Short Lease (30m / 1800s) |
+| **miwa** | Divisi B (Network 3) | `02:42:ea:de:c4:00` | `192.238.3.100` | `/24` (`255.255.255.0`) | `192.238.3.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | Long Lease (12h / 43200s) |
+| **kugisaki** | Divisi B (Network 3) | `02:42:bb:7b:73:00` | `192.238.3.99` | `/24` (`255.255.255.0`) | `192.238.3.1` | `192.238.1.2`, `192.238.1.3` | `jarkom.com` | VIP Reservation (Static Lease) |
+ 
+## 5. Bukti Per Client
+ 
+### 5.1 Divisi A (Network 2)
+ 
+| Client | Pesan `udhcpc` | Lease time | Route default | Route connected |
+|---|---|---|---|---|
+| itadori | `lease of 192.238.2.10 obtained from 192.238.4.10` | 593 s | `default via 192.238.2.1 dev eth0` | `192.238.2.0/24 dev eth0 src 192.238.2.10` |
+| fushiguro | `lease of 192.238.2.11 obtained from 192.238.4.10` | 600 s | `default via 192.238.2.1 dev eth0` | `192.238.2.0/24 dev eth0 src 192.238.2.11` |
+| zenin | `lease of 192.238.2.70 obtained from 192.238.4.10` | 600 s | `default via 192.238.2.1 dev eth0` | `192.238.2.0/24 dev eth0 src 192.238.2.70` |
+| okkotsu | `lease of 192.238.2.71 obtained from 192.238.4.10` | 600 s | `default via 192.238.2.1 dev eth0` | `192.238.2.0/24 dev eth0 src 192.238.2.71` |
+ 
+### 5.2 Divisi B (Network 3)
+ 
+| Client | Pesan `udhcpc` | Lease time | Route default | Route connected |
+|---|---|---|---|---|
+| ino | `lease of 192.238.3.10 obtained from 192.238.4.10` | 1800 s | `default via 192.238.3.1 dev eth0` | `192.238.3.0/24 dev eth0 src 192.238.3.10` |
+| kusakabe | `lease of 192.238.3.11 obtained from 192.238.4.10` | 1800 s | `default via 192.238.3.1 dev eth0` | `192.238.3.0/24 dev eth0 src 192.238.3.11` |
+| miwa | `lease of 192.238.3.100 obtained from 192.238.4.10` | 43200 s | `default via 192.238.3.1 dev eth0` | `192.238.3.0/24 dev eth0 src 192.238.3.100` |
+| kugisaki | `lease of 192.238.3.99 obtained from 192.238.4.10` | 600 s | `default via 192.238.3.1 dev eth0` | `192.238.3.0/24 dev eth0 src 192.238.3.99` |
+ 
+### 5.3 DNS dan domain-search (identik pada seluruh client)
+ 
+```text
+search jarkom.com
+nameserver 192.238.1.2
+nameserver 192.238.1.3
+```
+ 
+### 5.4 Contoh output lengkap (client `kugisaki`)
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.3.99, server 192.238.4.10
+udhcpc: lease of 192.238.3.99 obtained from 192.238.4.10, lease time 600
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+eth0             UNKNOWN        192.238.3.99/24 fe80::42:bbff:fe7b:7300/64
+eth1             UNKNOWN        fe80::42:bbff:fe7b:7301/64
+eth2             UNKNOWN        fe80::42:bbff:fe7b:7302/64
+eth3             UNKNOWN        fe80::42:bbff:fe7b:7303/64
+default via 192.238.3.1 dev eth0 metric 55434
+192.238.3.0/24 dev eth0 proto kernel scope link src 192.238.3.99
+search jarkom.com
+nameserver 192.238.1.2
+nameserver 192.238.1.3
+```
+
+<img width="529" height="243" alt="Screenshot 2026-10-13 at 20 29 49" src="https://github.com/user-attachments/assets/23e9ff1a-a48c-42a3-b26c-8c0826ac7378" />
+
+ 
+## 6. Pencocokan dengan `/var/lib/dhcp/dhcpd.leases` di Tengen
+ 
+Cuplikan lease dari `tengen`:
+ 
+```text
+lease 192.238.2.10 {
+  starts 2 2026/10/13 13:26:55;
+  ends 2 2026/10/13 13:36:55;
+  binding state active;
+  hardware ethernet 02:42:ba:30:f3:00;
+  set vendor-class-identifier = "udhcp 1.37.0";
+}
+lease 192.238.2.11 {
+  starts 2 2026/10/13 13:27:03;
+  ends 2 2026/10/13 13:37:03;
+  ...
+}
+```
+
+<img width="537" height="319" alt="Screenshot 2026-10-13 at 21 10 17" src="https://github.com/user-attachments/assets/f26f59b1-2f1e-47c2-8405-265d91d147d2" />
+
+ 
+| Pengecekan | Hasil |
+|---|---|
+| `lease 192.238.2.10` memiliki `hardware ethernet 02:42:ba:30:f3:00` | Cocok dengan MAC **itadori** |
+| `lease 192.238.2.10` berstatus `binding state active` | Lease aktif |
+| Durasi `starts` ke `ends` | 10 menit (600 s), sesuai `default-lease-time` Divisi A |
+| `lease 192.238.2.11` | Sesuai IP **fushiguro** (urutan kedua di pool `pool1_dev`) |
+| `vendor-class-identifier = "udhcp 1.37.0"` | Sesuai versi `udhcpc` di client |
+ 
+Catatan: waktu pada `dhcpd.leases` ditulis dalam UTC (13:26 UTC setara 20:26 WIB). Cuplikan layar hanya menampilkan entri awal file; entri lease client lain dicocokkan melalui pesan `lease of ... obtained from 192.238.4.10` pada masing-masing client.
+ 
+## 7. Pengecekan Tabrakan dan Kebijakan Pool
+ 
+### 7.1 Tidak ada alamat bertabrakan
+ 
+Delapan client menerima delapan alamat berbeda:
+ 
+`192.238.2.10`, `192.238.2.11`, `192.238.2.70`, `192.238.2.71`, `192.238.3.10`, `192.238.3.11`, `192.238.3.99`, `192.238.3.100`.
+ 
+Alamat `192.238.2.x` dan `192.238.3.x` berada pada subnet berbeda, sehingga tidak ada duplikasi dalam satu subnet.
+ 
+### 7.2 Semua alamat sesuai kebijakan pool
+ 
+| Client | IP | Pool kebijakan | Range | Dalam range? |
+|---|---|---|---|---|
+| itadori | `192.238.2.10` | `pool1_dev` | `.2.10` – `.2.35` | Ya |
+| fushiguro | `192.238.2.11` | `pool1_dev` | `.2.10` – `.2.35` | Ya |
+| zenin | `192.238.2.70` | `pool2_support` | `.2.70` – `.2.95` | Ya |
+| okkotsu | `192.238.2.71` | `pool2_support` | `.2.70` – `.2.95` | Ya |
+| ino | `192.238.3.10` | `short_lease` | `.3.10` – `.3.89` | Ya |
+| kusakabe | `192.238.3.11` | `short_lease` | `.3.10` – `.3.89` | Ya |
+| miwa | `192.238.3.100` | `long_lease` | `.3.100` – `.3.199` | Ya |
+| kugisaki | `192.238.3.99` | Reservasi (`host`) | di luar semua pool | Ya (static lease) |
+ 
+Tidak ada client yang menerima alamat di luar kebijakan pool-nya. Setiap client Divisi A masuk ke pool sesuai class-nya, dan lease time Divisi B sesuai kebijakan (1800 s untuk short lease, 43200 s untuk long lease).
 
