@@ -591,6 +591,200 @@ grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >>
 
    <img width="987" height="294" alt="image" src="https://github.com/user-attachments/assets/9edd683d-1495-4383-abb7-4c1a3d69251b" />
 
+## Soal 5: Mengatur durasi lease di Network 3 menggunakan DHCP Class berdasarkan MAC Address
+
+- Short Lease (30 menit = 1800 detik): Pool 192.238.3.10–192.238.3.89 untuk ino dan kusakabe.   
+- Long Lease (12 jam = 43200 detik): Pool 192.238.3.100–192.238.3.199 untuk miwa.
+- DHCP Options: DNS 192.238.1.2, 192.238.1.3 dan domain-search.
+
+### Langkah 1: Cek MAC Address Klien Network 3 (kusakabe & miwa) 
+
+```
+ip link show eth0
+```
+
+<img width="1059" height="115" alt="image" src="https://github.com/user-attachments/assets/df74653f-68b0-42be-a29d-91906b43699f" />
+
+<img width="1061" height="116" alt="image" src="https://github.com/user-attachments/assets/87304dca-ae50-41f4-b98d-cf1a2466b9ac" />
+
+<img width="1061" height="112" alt="image" src="https://github.com/user-attachments/assets/fa3e02c1-231c-4e07-97f7-ce89f2697915" />
+
+| Nama Node | Kelompok / Class | MAC Address | Rentang IP Pool | Default / Max Lease Time |
+|---|---|---|---|---|
+| **ino** | Short Lease (`short_lease`) | `02:42:a5:41:3b:00` | `192.238.3.10` – `192.238.3.89` | 1800 detik (30 menit) |
+| **kusakabe** | Short Lease (`short_lease`) | `02:42:89:2f:5f:00` | `192.238.3.10` – `192.238.3.89` | 1800 detik (30 menit) |
+| **miwa** | Long Lease (`long_lease`) | `02:42:ea:de:c4:00` | `192.238.3.100` – `192.238.3.199` | 43200 detik (12 jam) |
+
+
+### Langkah 2:  **Script Akumulatif `/root/tengen-dhcp.sh` di Node `tengen`**
+
+Jalankan seluruh blok kode berikut di terminal node **`tengen`**:
+
+```bash
+cat << 'EOF' > /root/tengen-dhcp.sh
+#!/bin/sh
+set -eu
+
+echo "=== [TENGEN] Mengonfigurasi DHCP Server (Soal 1-5 Akumulatif) ==="
+
+# =========================================================================
+# MAC ADDRESS CLIENT NETWORK 3
+# =========================================================================
+MAC_INO="02:42:a5:41:3b:00"
+MAC_KUSAKABE="02:42:89:2f:5f:00"
+MAC_MIWA="02:42:ea:de:c4:00"
+
+DOMAIN_NAME="jarkom.com"          # Sesuaikan domain kelompokmu jika ada
+# =========================================================================
+
+cat << 'DEFAULT_CONF' > /etc/default/isc-dhcp-server
+INTERFACESv4="eth0"
+INTERFACESv6=""
+DEFAULT_CONF
+
+cat << DHCPD_CONF > /etc/dhcp/dhcpd.conf
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+# DHCP Options Global (Soal 5)
+option domain-name-servers 192.238.1.2, 192.238.1.3;
+option domain-search "${DOMAIN_NAME}";
+
+# -------------------------------------------------------------
+# CLASS DIVISI A - NETWORK 2 (Soal 4)
+# -------------------------------------------------------------
+class "pool1_dev" {
+    match hardware;
+}
+subclass "pool1_dev" 1:02:42:ba:30:f3:00;
+subclass "pool1_dev" 1:02:42:93:96:61:00;
+
+class "pool2_support" {
+    match hardware;
+}
+subclass "pool2_support" 1:02:42:02:87:12:00;
+subclass "pool2_support" 1:02:42:89:e7:e4:00;
+
+# -------------------------------------------------------------
+# CLASS DIVISI B - NETWORK 3 (Soal 5)
+# -------------------------------------------------------------
+class "short_lease" {
+    match hardware;
+}
+subclass "short_lease" 1:${MAC_INO};
+subclass "short_lease" 1:${MAC_KUSAKABE};
+
+class "long_lease" {
+    match hardware;
+}
+subclass "long_lease" 1:${MAC_MIWA};
+
+# -------------------------------------------------------------
+# Network 4: Data Center (Subnet Lokal Tengen)
+# -------------------------------------------------------------
+subnet 192.238.4.0 netmask 255.255.255.0 {
+    option routers 192.238.4.1;
+    option broadcast-address 192.238.4.255;
+}
+
+# -------------------------------------------------------------
+# Network 2: Scope Divisi A (Dual Pool dengan Class - Soal 4)
+# -------------------------------------------------------------
+subnet 192.238.2.0 netmask 255.255.255.0 {
+    option routers 192.238.2.1;
+    option broadcast-address 192.238.2.255;
+
+    # Pool 1: Dev (Itadori & Fushiguro)
+    pool {
+        allow members of "pool1_dev";
+        range 192.238.2.10 192.238.2.35;
+    }
+
+    # Pool 2: Support (Zenin & Okkotsu)
+    pool {
+        allow members of "pool2_support";
+        range 192.238.2.70 192.238.2.95;
+    }
+}
+
+# -------------------------------------------------------------
+# Network 3: Scope Divisi B (Short & Long Lease Pool - Soal 5)
+# -------------------------------------------------------------
+subnet 192.238.3.0 netmask 255.255.255.0 {
+    option routers 192.238.3.1;
+    option broadcast-address 192.238.3.255;
+
+    # Pool Short Lease: Ino & Kusakabe (30 Menit = 1800 detik)
+    pool {
+        allow members of "short_lease";
+        range 192.238.3.10 192.238.3.89;
+        default-lease-time 1800;
+        max-lease-time 1800;
+    }
+
+    # Pool Long Lease: Miwa (12 Jam = 43200 detik)
+    pool {
+        allow members of "long_lease";
+        range 192.238.3.100 192.238.3.199;
+        default-lease-time 43200;
+        max-lease-time 43200;
+    }
+}
+DHCPD_CONF
+
+# Validasi sintaks
+/usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
+
+# Restart Service
+service isc-dhcp-server restart || /etc/init.d/isc-dhcp-server restart || true
+
+echo "=== [TENGEN] Setup Soal 5 Selesai ==="
+EOF
+
+chmod +x /root/tengen-dhcp.sh
+
+# Otomatisasi Boot / Restart
+grep -qxF '/root/tengen-dhcp.sh' /root/.profile || echo '/root/tengen-dhcp.sh' >> /root/.profile
+grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >> /root/.bashrc
+
+# Eksekusi script
+/root/tengen-dhcp.sh
+
+```
+
+### Langkah 3: Pengujian 
+
+1. Di ino & kusakabe
+
+   ```
+    udhcpc -i eth0 -q
+   ```
+   IP berada di rentang 192.238.3.10 – 192.238.3.89 dengan keterangan lease time 1800.
+
+   <img width="1011" height="145" alt="image" src="https://github.com/user-attachments/assets/764c1242-3790-4ae8-89ea-8bc1ad28852f" />
+
+   <img width="1011" height="139" alt="image" src="https://github.com/user-attachments/assets/f4cbbc85-4af6-4b91-91f8-b4bbfc050f8b" />
+
+    
+   
+2. Di miwa
+
+   ```
+    udhcpc -i eth0 -q
+   ```
+
+   <img width="1026" height="145" alt="image" src="https://github.com/user-attachments/assets/78a07fe0-0fc2-4d1f-aba6-610fcea39307" />
+
+3. Cek DNS & Domain Search pada klien Network 3
+
+   ```
+    cat /etc/resolv.conf
+   ```
+
+   Menampilkan nameserver 192.238.1.2, nameserver 192.238.1.3, dan search jarkom.com
+
+   <img width="403" height="83" alt="image" src="https://github.com/user-attachments/assets/63363b2d-84a3-4928-82c0-c2f843c2398a" />
 
 
 
