@@ -9,40 +9,44 @@
 
 Asumsi prefix kelompok adalah `192.238`. Semua interface internal menggunakan subnet mask `/24`.
 
-| Network | Node | Peran | Alamat IP | Default Gateway |
+| Network | Node | Peran / Fungsi | Alamat IP | Default Gateway |
 |---|---|---|---|---|
-| NAT | `jichi` (`eth0`) | Koneksi WAN ke NAT | DHCP dari NAT | Dari NAT |
-| Network 1 (`192.238.1.0/24`) | `jichi` (`eth1`) | Gateway DMZ | `192.238.1.1/24` | — |
+| **NAT** | `jichi` (`eth0`) | Koneksi WAN ke NAT GNS3 | `192.168.122.100/24` | `192.168.122.1` |
+| **Network 1** (`192.238.1.0/24`) | `jichi` (`eth1`) | Gateway DMZ | `192.238.1.1/24` | — |
 | Network 1 | `utahime` | DNS Master | `192.238.1.2/24` | `192.238.1.1` |
 | Network 1 | `shoko` | DNS Slave | `192.238.1.3/24` | `192.238.1.1` |
-| Network 1 | `gojo` | Public reverse proxy | `192.238.1.4/24` | `192.238.1.1` |
-| Network 2 (`192.238.2.0/24`) | `jichi` (`eth2`) | Gateway / DHCP relay | `192.238.2.1/24` | — |
-| Network 2 | `itadori` | Klien Divisi A, Pool 1 | DHCP | `192.238.2.1` |
-| Network 2 | `fushiguro` | Klien Divisi A, Pool 1 | DHCP | `192.238.2.1` |
-| Network 3 (`192.238.3.0/24`) | `jichi` (`eth3`) | Gateway / DHCP relay | `192.238.3.1/24` | — |
-| Network 3 | `zenin` | Klien Divisi B, Pool 2 | DHCP | `192.238.3.1` |
-| Network 3 | `okkotsu` | Klien Divisi B, Pool 2 | DHCP | `192.238.3.1` |
-| Network 3 | `ino` | Klien short lease | DHCP | `192.238.3.1` |
-| Network 3 | `kusakabe` | Klien short lease | DHCP | `192.238.3.1` |
-| Network 3 | `miwa` | Klien long lease | DHCP | `192.238.3.1` |
-| Network 3 | `kugisaki` | Klien fixed address | `192.238.3.50/24` | `192.238.3.1` |
-| Network 4 (`192.238.4.0/24`) | `jichi` (`eth4`) | Gateway data center | `192.238.4.1/24` | — |
-| Network 4 | `tengen` | DHCP server | `192.238.4.2/24` | `192.238.4.1` |
-| Network 4 | `geto` | Internal load balancer | `192.238.4.3/24` | `192.238.4.1` |
-| Network 4 | `maki` | Worker frontend | `192.238.4.10/24` | `192.238.4.1` |
-| Network 4 | `panda` | Worker frontend | `192.238.4.11/24` | `192.238.4.1` |
-| Network 4 | `nanami` | Worker API utama | `192.238.4.12/24` | `192.238.4.1` |
-| Network 4 | `todo` | Worker API utama | `192.238.4.13/24` | `192.238.4.1` |
-| Network 4 | `kirara` | Worker API cadangan | `192.238.4.14/24` | `192.238.4.1` |
+| Network 1 | `gojo` | Public Reverse Proxy | `192.238.1.4/24` | `192.238.1.1` |
+| **Network 2** (`192.238.2.0/24`) | `jichi` (`eth2`) | Gateway / DHCP Relay Network 2 | `192.238.2.1/24` | — |
+| Network 2 | `itadori` | Klien Divisi A (Pool 1 - Dev) | DHCP (`.2.10`–`.2.35`) | `192.238.2.1` |
+| Network 2 | `fushiguro` | Klien Divisi A (Pool 1 - Dev) | DHCP (`.2.10`–`.2.35`) | `192.238.2.1` |
+| Network 2 | `zenin` | Klien Divisi A (Pool 2 - Support) | DHCP (`.2.70`–`.2.95`) | `192.238.2.1` |
+| Network 2 | `okkotsu` | Klien Divisi A (Pool 2 - Support) | DHCP (`.2.70`–`.2.95`) | `192.238.2.1` |
+| **Network 3** (`192.238.3.0/24`) | `jichi` (`eth3`) | Gateway / DHCP Relay Network 3 | `192.238.3.1/24` | — |
+| Network 3 | `ino` | Klien Divisi B (Short Lease - 30m) | DHCP (`.3.10`–`.3.89`) | `192.238.3.1` |
+| Network 3 | `kusakabe` | Klien Divisi B (Short Lease - 30m) | DHCP (`.3.10`–`.3.89`) | `192.238.3.1` |
+| Network 3 | `miwa` | Klien Divisi B (Long Lease - 12j) | DHCP (`.3.100`–`.3.199`) | `192.238.3.1` |
+| Network 3 | `kugisaki` | Klien Fixed Address | `192.238.3.50/24` (DHCP Fixed) | `192.238.3.1` |
+| **Network 4** (`192.238.4.0/24`) | `jichi` (`eth4`) | Gateway Data Center | `192.238.4.1/24` | — |
+| Network 4 | `tengen` | DHCP Server Utama | `192.238.4.10/24` | `192.238.4.1` |
+| Network 4 | `geto` | Internal Load Balancer | `192.238.4.3/24` | `192.238.4.1` |
+| Network 4 | `maki` | Worker Frontend | `192.238.4.2/24` | `192.238.4.1` |
+| Network 4 | `panda` | Worker Frontend | `192.238.4.11/24` | `192.238.4.1` |
+| Network 4 | `nanami` | Worker API Utama | `192.238.4.12/24` | `192.238.4.1` |
+| Network 4 | `todo` | Worker API Utama | `192.238.4.13/24` | `192.238.4.1` |
+| Network 4 | `kirara` | Worker API Cadangan | `192.238.4.14/24` | `192.238.4.1` |
 | Network 4 | `yaga` | Database Master MariaDB | `192.238.4.20/24` | `192.238.4.1` |
 | Network 4 | `inumaki` | Database Slave MariaDB | `192.238.4.21/24` | `192.238.4.1` |
 
 ### Rentang DHCP yang disarankan
 
-| Network | Rentang DHCP |
-|---|---|
-| Network 2 | `192.238.2.100`–`192.238.2.199` |
-| Network 3 | `192.238.3.100`–`192.238.3.199` |
+| Subnet | Alokasi Pool / Scope | Rentang Alamat IP | Pengguna Target | Keterangan / Kebijakan |
+|---|---|---|---|---|
+| **Network 2** (`192.238.2.0/24`) | Pool 1 (Dev) | `192.238.2.10` – `192.238.2.35` | `itadori`, `fushiguro` | Dibatasi via Class MAC Address |
+| | Pool Exclude | `192.238.2.36` – `192.238.2.69` | — | Dikosongkan / Tidak Dialokasikan |
+| | Pool 2 (Support) | `192.238.2.70` – `192.238.2.95` | `zenin`, `okkotsu` | Dibatasi via Class MAC Address |
+| **Network 3** (`192.238.3.0/24`) | Short Lease Pool | `192.238.3.10` – `192.238.3.89` | `ino`, `kusakabe` | Lease Time: 30 Menit (1800d) |
+| | Fixed Address | `192.238.3.50` | `kugisaki` | Reservasi IP Khusus |
+| | Long Lease Pool | `192.238.3.100` – `192.238.3.199` | `miwa` | Lease Time: 12 Jam (43200d) |
 
 > Pastikan `192.238.3.50` untuk `kugisaki` dikecualikan dari rentang DHCP jika alamatnya dikonfigurasi manual.
 
