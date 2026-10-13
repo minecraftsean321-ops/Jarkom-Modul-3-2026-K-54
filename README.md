@@ -1214,3 +1214,180 @@ sequenceDiagram
  
 `giaddr` bernilai `192.238.3.1`, yaitu alamat interface jichi pada subnet client (Network 3). Hal ini sesuai dengan prinsip relay DHCP: relay mengisi `giaddr` dengan alamat interface yang menerima broadcast client, lalu server memilih scope `192.238.3.0/24` berdasarkan nilai itu dan membalas ke alamat tersebut. Pemilihan alamat `192.238.3.10` dari pool Network 3 dan lease time `1800` detik (kebijakan short lease untuk `ino`) menunjukkan server membaca `giaddr` dengan benar.
 
+# Laporan Soal 9: Simulasi Gangguan DHCP Relay pada Jichi
+ 
+## 1. Soal
+ 
+> Sebuah gangguan memutus jalur relay dan membuat permintaan alamat tidak sampai ke Data Center. Hentikan service **DHCP Relay** pada **jichi**, lalu paksa salah satu client di Network 2 atau Network 3 meminta lease baru dan catat gejalanya. Pulihkan service relay, ulangi permintaan DHCP, lalu buktikan bahwa client kembali memperoleh alamat dari pool yang benar dengan gateway semula.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Node yang diganggu | `jichi` (router dan DHCP Relay) |
+| Client yang diuji | `itadori` (Network 2) dan `ino` (Network 3) |
+| Gejala saat relay mati | Client mengirim `DISCOVER` berulang, lalu gagal: `udhcpc failed to get a DHCP lease` |
+| Setelah relay dipulihkan | Client kembali mendapat lease dari server `192.238.4.10` |
+| itadori | `192.238.2.10/24`, gateway `192.238.2.1`, pool `pool1_dev`, lease 470 s |
+| ino | `192.238.3.10/24`, gateway `192.238.3.1`, pool `short_lease`, lease 1800 s |
+| Gateway setelah pemulihan | Sama dengan sebelum gangguan |
+ 
+## 3. Latar Belakang Singkat
+ 
+Client di Network 2 dan Network 3 berada di subnet berbeda dari DHCP Server `tengen` (`192.238.4.10`, Network 4). Paket `DHCPDISCOVER` bersifat broadcast dan tidak diteruskan oleh router. Karena itu dibutuhkan **DHCP Relay** di `jichi`, yang menerima broadcast client lalu meneruskannya secara unicast ke server dengan mengisi field `giaddr`. Jika relay mati, permintaan client tidak pernah sampai ke server.
+ 
+## 4. Fase 1: Menghentikan DHCP Relay di Jichi
+ 
+Perintah di node `jichi`:
+ 
+```sh
+service isc-dhcp-relay stop || pkill -9 dhcrelay
+```
+<img width="539" height="358" alt="Screenshot 2026-10-13 at 22 18 59" src="https://github.com/user-attachments/assets/f3250d85-d2f2-43a8-a539-1ff61dd43215" />
+
+ 
+Perintah ini menghentikan service relay lewat `service`, dan jika gagal, mematikan paksa proses `dhcrelay` dengan `pkill -9`. Perintah selesai tanpa pesan error (prompt kembali dengan normal).
+ 
+## 5. Fase 2: Gejala Saat Relay Mati
+ 
+Client dipaksa meminta lease baru dengan `-n` (keluar jika lease tidak didapat):
+ 
+```sh
+udhcpc -i eth0 -n
+```
+ 
+### 5.1 Output `itadori` (Network 2)
+ 
+```text
+itadori:~# udhcpc -i eth0 -n
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc failed to get a DHCP lease
+udhcpc: no lease, failing
+```
+<img width="538" height="357" alt="Screenshot 2026-10-13 at 22 19 15" src="https://github.com/user-attachments/assets/36afbe8f-35fe-4091-925a-b77c3fa77300" />
+
+ 
+### 5.2 Output `ino` (Network 3)
+ 
+```text
+ino:~# udhcpc -i eth0 -n
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc: broadcasting discover
+udhcpc failed to get a DHCP lease
+udhcpc: no lease, failing
+```
+<img width="541" height="357" alt="Screenshot 2026-10-13 at 22 19 06" src="https://github.com/user-attachments/assets/9680e018-5430-45b1-836d-c58d275e4139" />
+
+ 
+### 5.3 Pencatatan gejala
+ 
+| Gejala | Penjelasan |
+|---|---|
+| `broadcasting discover` terulang 5 kali | Client terus mengirim `DISCOVER` tetapi tidak pernah menerima `OFFER` |
+| Tidak ada baris `broadcasting select` | Tidak ada tawaran alamat dari server, sehingga tahap `REQUEST` tidak pernah terjadi |
+| `udhcpc failed to get a DHCP lease` | Client menyerah setelah percobaan habis |
+| `udhcpc: no lease, failing` | Tidak ada lease yang diperoleh; client tidak mendapat IP |
+| Terjadi pada kedua network | Gangguan ada pada jalur bersama (jichi), bukan pada satu client atau satu subnet saja |
+ 
+## 6. Fase 3: Memulihkan DHCP Relay
+ 
+Perintah di node `jichi`:
+ 
+```sh
+bash jichi-config.sh
+```
+ 
+Output:
+ 
+```text
+=== [JICHI] Mengonfigurasi Router, NAT, & DHCP Relay ===
+start-stop-daemon: warning: failed to kill 535: No such process
+Requesting: eth2 as upstream: Y downstream: Y
+Requesting: eth3 as upstream: Y downstream: Y
+Requesting: eth4 as upstream: Y downstream: Y
+=== [JICHI] Setup Berhasil Selesai ===
+```
+<img width="539" height="170" alt="Screenshot 2026-10-13 at 22 20 57" src="https://github.com/user-attachments/assets/c45082c7-e316-43f3-b28f-3f6021e1fcc9" />
+
+ 
+| Baris output | Arti |
+|---|---|
+| `failed to kill 535: No such process` | Proses `dhcrelay` lama (PID 535) sudah tidak berjalan, sesuai kondisi setelah relay dihentikan pada Fase 1 |
+| `Requesting: eth2/eth3/eth4 ... upstream: Y downstream: Y` | `dhcrelay` aktif kembali dan mendengarkan pada tiga interface |
+| `Setup Berhasil Selesai` | Skrip konfigurasi (router, NAT, DHCP Relay) selesai dijalankan |
+ 
+## 7. Fase 4: Bukti Pemulihan
+ 
+Client mengulangi permintaan DHCP:
+ 
+```sh
+udhcpc -i eth0 -q
+ip -br addr
+ip route
+```
+ 
+### 7.1 Output `itadori` (Network 2)
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.2.10, server 192.238.4.10
+udhcpc: lease of 192.238.2.10 obtained from 192.238.4.10, lease time 470
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+eth0             UNKNOWN        192.238.2.10/24 fe80::42:baff:fe30:f300/64
+default via 192.238.2.1 dev eth0 metric 56257
+192.238.2.0/24 dev eth0 proto kernel scope link src 192.238.2.10
+```
+<img width="539" height="356" alt="Screenshot 2026-10-13 at 22 21 30" src="https://github.com/user-attachments/assets/1f3f533d-5535-43da-a9c5-84ec8387bece" />
+
+ 
+### 7.2 Output `ino` (Network 3)
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.3.10, server 192.238.4.10
+udhcpc: lease of 192.238.3.10 obtained from 192.238.4.10, lease time 1800
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+eth0             UNKNOWN        192.238.3.10/24 fe80::42:a5ff:fe41:3b00/64
+default via 192.238.3.1 dev eth0 metric 56270
+192.238.3.0/24 dev eth0 proto kernel scope link src 192.238.3.10
+```
+<img width="537" height="357" alt="Screenshot 2026-10-13 at 22 19 55" src="https://github.com/user-attachments/assets/238e0f63-52af-43e3-9c95-a96953e9b9fb" />
+
+
+## 8. Perbandingan Sebelum, Saat, dan Setelah Gangguan
+ 
+| Client | Sebelum gangguan (Soal 7) | Saat relay mati | Setelah relay dipulihkan |
+|---|---|---|---|
+| itadori | `192.238.2.10`, gw `192.238.2.1` | Gagal, tidak ada lease | `192.238.2.10/24`, gw `192.238.2.1` |
+| ino | `192.238.3.10`, gw `192.238.3.1` | Gagal, tidak ada lease | `192.238.3.10/24`, gw `192.238.3.1` |
+ 
+### Validasi pool dan kebijakan
+ 
+| Client | IP | Pool yang benar | Range | Lease time | Sesuai? |
+|---|---|---|---|---|---|
+| itadori | `192.238.2.10` | `pool1_dev` | `.2.10` – `.2.35` | 470 s (sisa dari 600 s) | Ya |
+| ino | `192.238.3.10` | `short_lease` | `.3.10` – `.3.89` | 1800 s | Ya |
+ 
+Lease time `470` pada itadori lebih kecil dari 600 karena server masih menyimpan lease aktif sebelumnya untuk MAC yang sama, sehingga yang diberikan adalah sisa waktu lease. Hal serupa terlihat pada Soal 7 (593 s).
+ 
+## 9. Analisis
+ 
+| Pertanyaan | Jawaban | Bukti |
+|---|---|---|
+| Apa dampak relay mati? | Client di Network 2 dan 3 tidak bisa mendapat IP | Hanya `broadcasting discover`, lalu `failed to get a DHCP lease` |
+| Mengapa gagal? | Broadcast `DISCOVER` tidak diteruskan ke Network 4 tanpa relay, sehingga tidak ada `OFFER` | Tidak ada baris `broadcasting select` |
+| Apakah relay berhasil dipulihkan? | Ya | Output `Requesting: ... upstream: Y downstream: Y` dan `Setup Berhasil Selesai` |
+| Apakah client kembali mendapat lease? | Ya, dari server `192.238.4.10` | `lease of ... obtained from 192.238.4.10` |
+| Apakah pool benar? | Ya | `192.238.2.10` (pool1_dev) dan `192.238.3.10` (short_lease) |
+| Apakah gateway semula? | Ya | `default via 192.238.2.1` dan `default via 192.238.3.1` |
