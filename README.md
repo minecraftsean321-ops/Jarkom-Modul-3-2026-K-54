@@ -219,7 +219,7 @@ grep -qxF '/root/node-config.sh' /root/.profile || echo '/root/node-config.sh' >
 /root/node-config.sh
 ```
 
-## Langkah 3: Pengujian di node Tengen
+### Langkah 3: Pengujian di node Tengen
 
 1. Cek IP & Default Route:
 
@@ -611,7 +611,8 @@ ip link show eth0
 
 <img width="1061" height="116" alt="image" src="https://github.com/user-attachments/assets/87304dca-ae50-41f4-b98d-cf1a2466b9ac" />
 
-<img width="1061" height="112" alt="image" src="https://github.com/user-attachments/assets/fa3e02c1-231c-4e07-97f7-ce89f2697915" />
+<img width="1061" height="112" alt="image" src="https://github.com/user-attachments/assets/fa3e02c1-231c-4e07-97f7-ce89f2697915" />  
+
 
 | Nama Node | Kelompok / Class | MAC Address | Rentang IP Pool | Default / Max Lease Time |
 |---|---|---|---|---|
