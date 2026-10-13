@@ -793,6 +793,96 @@ grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc || echo '/root/tengen-dhcp.sh' >>
    <img width="447" height="109" alt="image" src="https://github.com/user-attachments/assets/0f12dc13-cad0-4c74-afd8-e16164f2f6b0" />
 
 
+# Laporan Soal 6: DHCP Static Lease Kugisaki (VIP)
 
+## 1. Soal
+
+> **Kugisaki** ditetapkan sebagai personel VIP yang harus mempertahankan alamat yang sama setiap kali terhubung. Buat **DHCP static lease** berdasarkan MAC Address client tersebut dengan **fixed address `[PREFIX IP].3.99`**. Pastikan alamat ini berada di luar seluruh pool dinamis, validasi konfigurasi server, lalu renew lease pada client. Buktikan bahwa alamat yang diterima sesuai dengan reservasi.
+
+Dengan prefix IP `192.238`, fixed address Kugisaki adalah **`192.238.3.99`**.
+
+## 2. Ringkasan
+
+| Item | Keterangan |
+|---|---|
+| Node server | `tengen` (`192.238.4.10`) |
+| Node client | `kugisaki` (Network 3, `192.238.3.0/24`) |
+| MAC Address Kugisaki | `02:42:bb:7b:73:00` |
+| Fixed address | `192.238.3.99` |
+| Hasil | **Berhasil**: Kugisaki menerima `192.238.3.99` sesuai reservasi |
+
+## 3. Konfigurasi Static Lease (di Tengen)
+
+Reservasi dibuat dengan blok `host` di dalam `subnet 192.238.3.0` pada `/etc/dhcp/dhcpd.conf`:
+
+```conf
+host kugisaki {
+    hardware ethernet 02:42:bb:7b:73:00;
+    fixed-address 192.238.3.99;
+}
+```
+
+### Alamat berada di luar seluruh pool dinamis
+
+Pool dinamis pada Network 3:
+
+| Pool | Range | Mencakup `.3.99`? |
+|---|---|---|
+| Pool pertama | `192.238.3.10` – `192.238.3.89` | Tidak |
+| Pool kedua | `192.238.3.100` – `192.238.3.199` | Tidak |
+
+Alamat `.3.99` berada di celah antara `.89` dan `.100`, sehingga tidak akan pernah dialokasikan secara dinamis ke client lain.
+
+### Validasi dan restart service
+
+```sh
+/usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
+service isc-dhcp-server restart
+```
+
+## 4. Pengujian di Client Kugisaki
+
+Perintah di node `kugisaki` untuk renew lease dan memeriksa alamat:
+
+```sh
+udhcpc -i eth0 -q
+ip -br addr
+```
+
+Output:
+
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.3.99, server 192.238.4.10
+udhcpc: lease of 192.238.3.99 obtained from 192.238.4.10, lease time 600
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+eth0             UNKNOWN        192.238.3.99/24 fe80::42:bbff:fe7b:7300/64
+eth1             UNKNOWN        fe80::42:bbff:fe7b:7301/64
+eth2             UNKNOWN        fe80::42:bbff:fe7b:7302/64
+eth3             UNKNOWN        fe80::42:bbff:fe7b:7303/64
+```
+Bukti :
+
+<img width="535" height="151" alt="Screenshot 2026-10-13 at 17 41 57" src="https://github.com/user-attachments/assets/c1fbd20f-b69b-4f34-8793-bac5e7aec0f1" />
+
+## 5. Analisis Bukti
+
+| Bukti | Penjelasan |
+|---|---|
+| `broadcasting select for 192.238.3.99` | Server menawarkan alamat tepat sesuai `fixed-address` |
+| `server 192.238.4.10` | Penawaran berasal dari DHCP Server Tengen |
+| `lease of 192.238.3.99 obtained` | Lease berhasil diperoleh client |
+| `eth0 ... 192.238.3.99/24` | Alamat benar terpasang pada interface `eth0` |
+| `fe80::42:bbff:fe7b:7300` | Link-local IPv6 diturunkan dari MAC `02:42:bb:7b:73:00`, cocok dengan MAC pada blok `host kugisaki` |
+
+## 6. Kesimpulan
+
+1. Static lease dibuat berdasarkan MAC Address Kugisaki (`02:42:bb:7b:73:00`) dengan `fixed-address 192.238.3.99`.
+2. Alamat `192.238.3.99` berada di luar seluruh pool dinamis Network 3.
+3. Konfigurasi divalidasi dan service DHCP di-restart.
+4. Setelah renew lease (`udhcpc -i eth0 -q`), Kugisaki menerima `192.238.3.99` dari `192.238.4.10`, sesuai dengan reservasi.
+
+**Soal 6 terpenuhi.**
 
 
