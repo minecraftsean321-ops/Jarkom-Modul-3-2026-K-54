@@ -1391,3 +1391,147 @@ Lease time `470` pada itadori lebih kecil dari 600 karena server masih menyimpan
 | Apakah client kembali mendapat lease? | Ya, dari server `192.238.4.10` | `lease of ... obtained from 192.238.4.10` |
 | Apakah pool benar? | Ya | `192.238.2.10` (pool1_dev) dan `192.238.3.10` (short_lease) |
 | Apakah gateway semula? | Ya | `default via 192.238.2.1` dan `default via 192.238.3.1` |
+
+# Laporan Soal 10: Verifikasi Ketahanan Layanan DHCP Setelah Restart
+ 
+## 1. Soal
+ 
+> Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart **DHCP Server** pada **tengen** dan **DHCP Relay** pada **jichi**, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| DHCP Server (`tengen`) | Aktif setelah restart: `dhcpd is running` |
+| DHCP Relay (`jichi`) | Aktif setelah restart: proses `dhcrelay` berjalan sejak boot (PID 127, mulai 22:37) |
+| NAT (`jichi`) | Aturan `MASQUERADE` pada `eth0` tetap ada |
+| Client Network 2 (`itadori`) | `192.238.2.10/24`, lease 600 s, server `192.238.4.10` |
+| Client Network 3 (`ino`) | `192.238.3.10/24`, lease 1800 s, server `192.238.4.10` |
+| Alamat setelah restart | Sama dengan sebelum restart (konsisten dengan Soal 7) |
+ 
+## 3. Topologi (GNS3, proyek K-54-MODUL-3)
+ 
+Dari tangkapan layar GNS3, `jichi` berperan sebagai router pusat dengan interface berikut:
+ 
+| Interface jichi | Terhubung ke | Isi segmen |
+|---|---|---|
+| `eth0` | `NAT1` | Jalur keluar (NAT) |
+| `eth1` | `Switch1` | `utahime`, `shoko`, `gojo` (di luar cakupan soal ini) |
+| `eth2` | `Switch2` → `Switch3`, `Switch9` | **Network 2**: `itadori`, `fushiguro`, `zenin`, `okkotsu` |
+| `eth3` | `Switch4` → `Switch5`, `Switch8` | **Network 3**: `ino`, `kusakabe`, `kugisaki`, `miwa` |
+| `eth4` | `Switch6` → `Switch7`, `Switch10` | **Network 4 (Data Center)**: `tengen` dan node lain |
+ 
+Hal ini sesuai dengan argumen `dhcrelay -i eth2 -i eth3 -i eth4`: relay mendengarkan di Network 2 dan 3 (sisi client) serta Network 4 (sisi server), lalu meneruskan ke `192.238.4.10`.
+ 
+## 4. Mekanisme Autostart
+ 
+| Node | Mekanisme | Bukti |
+|---|---|---|
+| `tengen` | Skrip `/root/tengen-dhcp.sh` didaftarkan ke `/root/.profile` dan `/root/.bashrc`, sehingga konfigurasi dan service DHCP dijalankan ulang setiap node dinyalakan | Isi skrip `tengen-dhcp.sh` (baris `grep -qxF ... >> /root/.profile` dan `/root/.bashrc`) |
+| `jichi` | Skrip `jichi-config.sh` (router, NAT, DHCP Relay) | Proses `dhcrelay` dan aturan NAT aktif setelah restart |
+ 
+Pada `tengen`, skrip menjalankan:
+ 
+```sh
+grep -qxF '/root/tengen-dhcp.sh' /root/.profile || echo '/root/tengen-dhcp.sh' >> /root/.profile
+grep -qxF '/root/tengen-dhcp.sh' /root/.bashrc  || echo '/root/tengen-dhcp.sh' >> /root/.bashrc
+```
+ 
+Selain itu skrip memvalidasi sintaks (`dhcpd -t`) dan me-restart `isc-dhcp-server` pada setiap eksekusi.
+ 
+## 5. Verifikasi Status Layanan Setelah Restart
+ 
+### 5.1 DHCP Server di `tengen`
+ 
+```sh
+service isc-dhcp-server status || ps aux | grep dhcpd
+```
+ 
+```text
+Status of ISC DHCPv4 server: dhcpd is running.
+```
+<img width="537" height="104" alt="Screenshot 2026-10-13 at 22 53 23" src="https://github.com/user-attachments/assets/64edebba-a13c-46f1-bf95-cabb4880675c" />
+
+ 
+### 5.2 DHCP Relay di `jichi`
+ 
+```sh
+ps aux | grep dhcrelay
+```
+ 
+```text
+root   127  0.0  0.0  5992  3200 ?      Ss  22:37  0:00 /usr/sbin/dhcrelay -q -i eth2 -i eth3 -i eth4 192.238.4.10
+root   130  0.0  0.0  3500  1792 pts/0  S+  22:37  0:00 grep dhcrelay
+```
+<img width="539" height="358" alt="Screenshot 2026-10-13 at 22 53 02" src="https://github.com/user-attachments/assets/84da6c81-f4ed-41bc-9a45-57fb0b13f19b" />
+
+ 
+| Bagian output | Arti |
+|---|---|
+| `/usr/sbin/dhcrelay` | Proses relay berjalan |
+| `-i eth2 -i eth3 -i eth4` | Mendengarkan pada Network 2, Network 3, dan Network 4 |
+| `192.238.4.10` | Server tujuan relay, yaitu `tengen` |
+| PID `127` dan waktu mulai `22:37` | PID rendah dengan waktu mulai yang sama dengan proses `grep` (PID 130), menunjukkan relay dijalankan otomatis saat node baru menyala |
+ 
+### 5.3 NAT di `jichi`
+ 
+```sh
+iptables -t nat -L -n -v
+```
+ 
+```text
+Chain POSTROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target      prot opt in  out   source     destination
+    0     0 MASQUERADE  all  --  *   eth0  0.0.0.0/0  0.0.0.0/0
+```
+<img width="539" height="358" alt="Screenshot 2026-10-13 at 22 53 02" src="https://github.com/user-attachments/assets/c71e71b8-1a47-4e05-823f-3eb955092acd" />
+
+ 
+Aturan `MASQUERADE` pada `eth0` (jalur ke `NAT1`) masih ada setelah restart, sehingga konfigurasi router jichi ikut pulih.
+ 
+## 6. Verifikasi Lease dan IP Client Setelah Restart
+ 
+Pada setiap client dijalankan:
+ 
+```sh
+udhcpc -i eth0 -q && ip -br addr
+```
+ 
+### 6.1 `itadori` (Network 2)
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.2.10, server 192.238.4.10
+udhcpc: lease of 192.238.2.10 obtained from 192.238.4.10, lease time 600
+lo      UNKNOWN   127.0.0.1/8 ::1/128
+eth0    UNKNOWN   192.238.2.10/24 fe80::42:baff:fe30:f300/64
+```
+<img width="539" height="351" alt="Screenshot 2026-10-13 at 22 57 43" src="https://github.com/user-attachments/assets/6b575beb-05b9-4001-bee1-83791e95afe6" />
+
+ 
+### 6.2 `ino` (Network 3)
+ 
+```text
+udhcpc: started, v1.37.0
+udhcpc: broadcasting discover
+udhcpc: broadcasting select for 192.238.3.10, server 192.238.4.10
+udhcpc: lease of 192.238.3.10 obtained from 192.238.4.10, lease time 1800
+lo      UNKNOWN   127.0.0.1/8 ::1/128
+eth0    UNKNOWN   192.238.3.10/24 fe80::42:a5ff:fe41:3b00/64
+```
+<img width="537" height="346" alt="Screenshot 2026-10-13 at 22 57 55" src="https://github.com/user-attachments/assets/e0f87044-b108-433c-ba3b-6e2e01f39e71" />
+
+ 
+| Client | IP | Server | Lease | Pool/kebijakan | Sesuai? |
+|---|---|---|---|---|---|
+| itadori | `192.238.2.10/24` | `192.238.4.10` | 600 s | Pool 1 (`pool1_dev`, `.2.10` – `.2.35`) | Ya |
+| ino | `192.238.3.10/24` | `192.238.4.10` | 1800 s | Short lease (`.3.10` – `.3.89`, 30 menit) | Ya |
+ 
+## 7. Bukti Konektivitas Jalur DHCP
+ 
+Client di Network 2 dan Network 3 mendapat lease dari server di Network 4 (`192.238.4.10`). Hal ini hanya bisa terjadi jika seluruh rantai berikut berfungsi setelah restart:
+ 
+1. `dhcrelay` di `jichi` menerima broadcast client pada `eth2` / `eth3`.
+2. Relay meneruskan paket ke `192.238.4.10` melalui `eth4`.
+3. `dhcpd` di `tengen` memilih scope berdasarkan `giaddr` dan membalas lewat relay.
