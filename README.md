@@ -3058,6 +3058,136 @@ grep -qxF '/root/setup-geto.sh' /root/.bashrc || echo '/root/setup-geto.sh' >> /
    Dari kedua foto tersebut dapat terlihat bahwa ketika layanan Nginx di nanami dan todo dimatikan, perintah curl masih bekerja di node nanami dan todo karena node kirara     berhasil nge backup worker API nya.
 
    
+## Soal 19: Mengonfigurasi node gojo (192.238.1.4) sebagai Public Reverse Proxy
+
+Dua fitur utama yang diminta: 
+
+1. Proxy Caching pada path / (Web Frontend) dengan durasi 10 menit dan response header X-Cache-Status.
+2. Rate Limiting pada path /api dengan batas 10 request/detik per IP client.
+
+### Langkah 1: Konfigurasi node gojo
+
+```
+cat << 'EOF' > /root/setup-gojo.sh
+#!/bin/sh
+set -eu
+
+echo "=== [GOJO] Mengonfigurasi Proxy Caching & Rate Limiting ==="
+
+# 1. Pastikan Route Default via Jichi
+ip route replace default via 192.238.1.1 2>/dev/null || true
+
+# 2. Buat Direktori Cache
+mkdir -p /var/cache/nginx_web /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+# 3. Tulis Konfigurasi Virtual Host Nginx
+cat << 'NGINX_CONF' > /etc/nginx/sites-available/default
+# Zone Cache Web Frontend (10m)
+proxy_cache_path /var/cache/nginx_web levels=1:2 keys_zone=web_cache:10m max_size=100m inactive=60m use_temp_path=off;
+
+# Zone Rate Limiting API (10 req/sec)
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+upstream web_frontend {
+    server 192.238.4.2:80;
+    server 192.238.4.11:80;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name jujutsu.k54.com www.jujutsu.k54.com _;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # 1. Web Frontend dengan Proxy Caching (10 Menit)
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_cache web_cache;
+        proxy_cache_valid 200 10m;
+        proxy_ignore_headers Cache-Control Expires Set-Cookie;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+
+    # 2. API Endpoint dengan Rate Limiting (10 req/s, Burst 5)
+    location /api {
+        limit_req zone=api_limit burst=5 nodelay;
+        proxy_pass http://192.238.4.3/;
+    }
+}
+NGINX_CONF
+
+# 4. Validasi Sintaks & Restart Nginx
+nginx -t
+service nginx restart || /etc/init.d/nginx restart || true
+echo "=== [GOJO] Ready ==="
+EOF
+
+chmod +x /root/setup-gojo.sh
+grep -qxF '/root/setup-gojo.sh' /root/.profile || echo '/root/setup-gojo.sh' >> /root/.profile
+grep -qxF '/root/setup-gojo.sh' /root/.bashrc || echo '/root/setup-gojo.sh' >> /root/.bashrc
+/root/setup-gojo.sh
+```
+
+### Langkah 2: Pengujian 
+Lakukan pengujian di node `itadori` atau `ino`:
+
+1. Pengujian Nginx Proxy Caching (Path `/`)
+   Jalankan perintah `curl` secara berturut-turut untuk mengecek status header cache:
+
+   a. Akses Pertama (Awal)
+
+   ```
+    curl -i http://jujutsu.k54.com/ | grep -i "X-Cache-Status"
+   ```
+
+   <img width="1065" height="169" alt="image" src="https://github.com/user-attachments/assets/d1cc586d-abbc-417f-bc76-32f053414e9c" />
+
+   b. Akses Kedua (Akhir)
+
+   <img width="1068" height="184" alt="image" src="https://github.com/user-attachments/assets/9ab281bf-7a5b-4b66-9cbc-8502f7d6d5a1" />
+
+2. Pengujian Rate Limiting (Path `/api`)
+   Jalankan request beruntun secara cepat menggunakan looping BASH:
+
+   ```bash
+   for i in $(seq 1 20); do curl -s -o /dev/null -w "Request $i: HTTP %{http_code}\n" http://jujutsu.k54.com/api; done
+   ```
+
+   <img width="1067" height="617" alt="image" src="https://github.com/user-attachments/assets/a4ded78c-8c18-4628-b50b-ec8c4c2427d3" />
+
+### Rangkuman 
+
+#### 1. Ringkasan Parameter Konfigurasi
+
+| Fitur | Target Path | Parameters / Konfigurasi | Status |
+|---|---|---|---|
+| **Proxy Caching** | `/` (Web Frontend) | `keys_zone=web_cache:10m`, `proxy_cache_valid 200 10m` | Aktif |
+| **Custom Cache Header** | `/` (Web Frontend) | `add_header X-Cache-Status $upstream_cache_status` | Aktif |
+| **Rate Limiting** | `/api` (Internal LB) | `zone=api_limit:10m rate=10r/s`, `burst=5 nodelay` | Aktif |
+
+---
+
+#### 2. Hasil Verifikasi Pengujian
+
+1. **Verifikasi Proxy Caching (`/`)**:
+   - Request 1 (Akses Awal): `X-Cache-Status: MISS` (Mengambil dari backend Web Worker).
+   - Request 2 (Akses Ulang): `X-Cache-Status: HIT` (Dilayani langsung dari memori cache Gojo).
+
+2. **Verifikasi Rate Limiting (`/api`)**:
+   - Pengujian dilakukan dengan mengirimkan 20 request beruntun secara simultan.
+   - Hasil HTTP Response Code:
+     - Request 1 - 6: `HTTP 200 OK`
+     - Request 7 - 20: `HTTP 503 Service Temporarily Unavailable`
+   - Terbukti Gojo secara efektif membatasi lonjakan request berlebihan yang melebihi batas 10 r/s.
+
+
+
+
+
+ 
 
 
     
