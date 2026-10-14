@@ -2031,3 +2031,226 @@ rtt min/avg/max/mdev = 22.978/23.583/24.077/0.455 ms
 | DNS Forwarder → `192.168.122.1` | `forwarders { 192.168.122.1; }` + `forward only`; flag `ra` aktif; `google.com` ter-resolve | Terpenuhi |
 | Uji `dig` dari client | Semua query dari `itadori` ke `192.238.1.2` | Terpenuhi |
 | Ping ke domain internet | `ping -c 3 google.com`: 3/3 diterima, 0% loss | Terpenuhi |
+
+# Laporan Soal 13: Replikasi MariaDB Master–Slave (yaga dan inumaki)
+ 
+## 1. Soal
+ 
+> Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada **yaga** sebagai **DB-Master** dan **inumaki** sebagai **DB-Slave**. Buat database **db_shibuya_<xxxx>** beserta tabel **request_logs** di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan **CHANGE MASTER TO**. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
+ 
+Dengan `<xxxx>` = `k54`, nama database adalah **`db_shibuya_k54`**.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| DB-Master | `yaga` (`192.238.4.20`), `server-id = 1`, binary log aktif |
+| DB-Slave | `inumaki` (`192.238.4.21`), `server-id = 2` |
+| Database | `db_shibuya_k54` |
+| Tabel | `request_logs` (`id`, `worker_name`, `client_ip`, `request_time`) |
+| Binary log Master | `mysql-bin.000001`, posisi `2243` saat `SHOW MASTER STATUS` |
+| User replikasi | `replica`@`%` (`GRANT REPLICATION SLAVE`) |
+| Akses remote Network 4 | `root`@`192.238.4.%` |
+| Bukti replikasi | Data `LOG_AWAL_YAGA` yang dimasukkan di yaga muncul di inumaki |
+ 
+## 3. Topologi
+ 
+Pada topologi GNS3, `yaga` dan `inumaki` berada pada `Switch10` bersama `tengen`, yaitu **Network 4 (Data Center)** `192.238.4.0/24` dengan gateway `192.238.4.1` (jichi).
+ 
+```mermaid
+flowchart LR
+    Y["yaga<br/>DB-Master<br/>192.238.4.20<br/>server-id 1, log_bin"] -->|"binary log (user replica)"| I["inumaki<br/>DB-Slave<br/>192.238.4.21<br/>server-id 2"]
+    N["Node lain di Network 4<br/>192.238.4.%"] -.->|"akses remote root"| Y
+```
+ 
+## 4. Konfigurasi DB-Master (yaga)
+ 
+Skrip: `/root/yaga-db.sh`
+ 
+### 4.1 Persiapan jaringan dan instalasi
+ 
+```sh
+ip route add default via 192.238.4.1 2>/dev/null || true
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+ 
+apt-get update && apt-get install -y mariadb-server mariadb-client
+ 
+mkdir -p /var/log/mysql /run/mysqld
+chown -R mysql:mysql /var/log/mysql /run/mysqld
+```
+ 
+Gateway dan DNS diatur agar node dapat mengunduh paket dari repository internet.
+ 
+### 4.2 Konfigurasi MariaDB (`/etc/mysql/mariadb.conf.d/50-server.cnf`)
+ 
+```ini
+[mysqld]
+user         = mysql
+pid-file     = /run/mysqld/mysqld.pid
+socket       = /run/mysqld/mysqld.sock
+port         = 3306
+bind-address = 0.0.0.0
+server-id    = 1
+log_bin      = /var/log/mysql/mysql-bin.log
+```
+ 
+| Direktif | Fungsi |
+|---|---|
+| `bind-address = 0.0.0.0` | MariaDB menerima koneksi dari semua interface (syarat akses remote) |
+| `server-id = 1` | ID unik Master dalam topologi replikasi |
+| `log_bin = /var/log/mysql/mysql-bin.log` | Mengaktifkan binary logging yang dibaca Slave |
+ 
+### 4.3 Database, tabel, dan hak akses
+ 
+```sql
+RESET MASTER;
+ 
+DROP DATABASE IF EXISTS db_shibuya_k54;
+CREATE DATABASE db_shibuya_k54;
+USE db_shibuya_k54;
+ 
+CREATE TABLE request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    worker_name VARCHAR(50) NOT NULL,
+    client_ip VARCHAR(50) NOT NULL,
+    request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ 
+CREATE USER IF NOT EXISTS 'replica'@'%' IDENTIFIED BY 'password123';
+GRANT REPLICATION SLAVE ON *.* TO 'replica'@'%';
+ 
+CREATE USER IF NOT EXISTS 'root'@'192.238.4.%' IDENTIFIED BY 'password123';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.238.4.%' WITH GRANT OPTION;
+ 
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY 'password123';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+ 
+FLUSH PRIVILEGES;
+```
+ 
+| Elemen | Fungsi |
+|---|---|
+| `RESET MASTER` | Memulai binary log dari awal (`mysql-bin.000001`) agar posisi awal Slave jelas |
+| `replica`@`%` + `REPLICATION SLAVE` | Akun khusus untuk Slave membaca binary log |
+| `root`@`192.238.4.%` | Hak akses remote bagi seluruh node di Network 4 (`192.238.4.0/24`) |
+| `root`@`%` | Akses remote tambahan dari host mana pun (lebih luas dari syarat soal) |
+ 
+### 4.4 Status Master
+ 
+```sh
+mariadb -u root -e "SHOW MASTER STATUS;"
+```
+ 
+```text
++------------------+----------+--------------+------------------+
+| File             | Position | Binlog_Do_DB | Binlog_Ignore_DB |
++------------------+----------+--------------+------------------+
+| mysql-bin.000001 |     2243 |              |                  |
++------------------+----------+--------------+------------------+
+=== SETUP MASTER YAGA SELESAI ===
+```
+ 
+Binary log `mysql-bin.000001` terbentuk dan terus bertambah (posisi `2243`), menandakan binary logging aktif dan merekam seluruh perubahan. `Binlog_Do_DB` dan `Binlog_Ignore_DB` kosong, sehingga semua database dicatat.
+ 
+## 5. Konfigurasi DB-Slave (inumaki)
+ 
+Skrip: `/root/inumaki-db.sh`
+ 
+### 5.1 Konfigurasi MariaDB
+ 
+Persiapan jaringan, instalasi paket, dan folder log sama seperti Master. Berkas konfigurasi:
+ 
+```ini
+[mysqld]
+user         = mysql
+pid-file     = /run/mysqld/mysqld.pid
+socket       = /run/mysqld/mysqld.sock
+port         = 3306
+bind-address = 0.0.0.0
+server-id    = 2
+```
+ 
+`server-id = 2` berbeda dari Master (`1`), sesuai syarat replikasi.
+ 
+### 5.2 Database lokal dan CHANGE MASTER TO
+ 
+```sql
+STOP SLAVE;
+RESET SLAVE ALL;
+ 
+CREATE DATABASE IF NOT EXISTS db_shibuya_k54;
+USE db_shibuya_k54;
+ 
+CREATE TABLE IF NOT EXISTS request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    worker_name VARCHAR(50) NOT NULL,
+    client_ip VARCHAR(50) NOT NULL,
+    request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ 
+CHANGE MASTER TO
+  MASTER_HOST='192.238.4.20',
+  MASTER_USER='replica',
+  MASTER_PASSWORD='password123',
+  MASTER_LOG_FILE='mysql-bin.000001',
+  MASTER_LOG_POS=4,
+  MASTER_CONNECT_RETRY=10;
+ 
+START SLAVE;
+```
+ 
+| Parameter `CHANGE MASTER TO` | Nilai | Arti |
+|---|---|---|
+| `MASTER_HOST` | `192.238.4.20` | Alamat Master (yaga) |
+| `MASTER_USER` / `MASTER_PASSWORD` | `replica` / `password123` | Akun replikasi yang dibuat di Master |
+| `MASTER_LOG_FILE` | `mysql-bin.000001` | Binary log awal (sesuai `SHOW MASTER STATUS`) |
+| `MASTER_LOG_POS` | `4` | Posisi awal berkas binary log |
+| `MASTER_CONNECT_RETRY` | `10` | Coba sambung ulang setiap 10 detik jika putus |
+ 
+Slave membaca dari posisi `4` (awal `mysql-bin.000001`), sehingga seluruh event sejak `RESET MASTER` ikut direplikasi, sedangkan posisi `2243` di Master adalah posisi akhir saat status ditampilkan. Setelah `START SLAVE`, skrip menampilkan `SHOW SLAVE STATUS\G` (disaring ke `Slave_IO_Running` dan `Slave_SQL_Running`) lalu mencetak `=== SETUP SLAVE INUMAKI SELESAI ===`.
+ 
+## 6. Pembuktian Replikasi
+ 
+### 6.1 Memasukkan data baru di Master (yaga)
+ 
+```sh
+mariadb -u root -D db_shibuya_k54 -e "INSERT INTO request_logs (worker_name, client_ip) VALUES ('LOG_AWAL_YAGA', '192.238.4.20');"
+```
+<img width="539" height="122" alt="Screenshot 2026-10-14 at 12 01 08" src="https://github.com/user-attachments/assets/b20d7081-f761-41da-b127-b508e2d89654" />
+
+ 
+Perintah selesai tanpa pesan error.
+ 
+### 6.2 Memeriksa data di Slave (inumaki)
+ 
+```sh
+mariadb -u root -D db_shibuya_k54 -e "SELECT * FROM request_logs;"
+```
+ 
+```text
++----+---------------+--------------+---------------------+
+| id | worker_name   | client_ip    | request_time        |
++----+---------------+--------------+---------------------+
+|  1 | LOG_AWAL_YAGA | 192.238.4.20 | 2026-10-14 10:28:28 |
++----+---------------+--------------+---------------------+
+```
+<img width="537" height="106" alt="Screenshot 2026-10-14 at 12 01 21" src="https://github.com/user-attachments/assets/8b6800a0-b3f5-4b67-aa31-399851177477" />
+
+ 
+Baris `LOG_AWAL_YAGA` tidak pernah dimasukkan langsung di inumaki, tetapi muncul di tabel `request_logs` milik Slave. Nilai `request_time` (`10:28:28`) ikut tersalin sama persis dari Master. Hal ini membuktikan data berpindah lewat replikasi binary log.
+ 
+## 7. Analisis Pemenuhan Soal
+ 
+| Persyaratan | Bukti | Status |
+|---|---|---|
+| MariaDB Master di yaga | Skrip `yaga-db.sh`, `server-id = 1`, `SHOW MASTER STATUS` valid | Terpenuhi |
+| MariaDB Slave di inumaki | Skrip `inumaki-db.sh`, `server-id = 2`, `CHANGE MASTER TO ... START SLAVE` | Terpenuhi |
+| Database `db_shibuya_<xxxx>` | `db_shibuya_k54` | Terpenuhi |
+| Tabel `request_logs` di Master | `CREATE TABLE request_logs (...)` | Terpenuhi |
+| Binary logging (log-bin, server-id) | `log_bin = /var/log/mysql/mysql-bin.log`, `server-id`; file `mysql-bin.000001` | Terpenuhi |
+| Slave dihubungkan dengan `CHANGE MASTER TO` | Parameter host, user, log file, dan posisi diatur | Terpenuhi |
+| Hak akses remote Network 4 | `root`@`192.238.4.%` dengan `GRANT ALL ... WITH GRANT OPTION` dan `bind-address = 0.0.0.0` | Terpenuhi (konfigurasi) |
+| Bukti replikasi | Data `LOG_AWAL_YAGA` dari Master terbaca di Slave | Terpenuhi |
+ 
+Catatan keamanan: akun `root`@`%` dan sandi `password123` yang tertulis di skrip hanya layak untuk lab. Pada lingkungan nyata, batasi akses ke subnet yang diperlukan (cukup `root`@`192.238.4.%`) dan gunakan sandi yang kuat.
