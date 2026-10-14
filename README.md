@@ -2501,4 +2501,180 @@ Connection: keep-alive
 
  
 Respons berformat `application/json` dengan kode `200`. Pada kode API, kegagalan koneksi database akan menghasilkan HTTP `500`, sehingga `200 OK` menandakan koneksi ke yaga berhasil dan request tercatat.
+
+# Laporan Soal 15: Load Balancer Internal Nginx dengan Weighted Round Robin 3:1
+ 
+## 1. Soal
+ 
+> Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan **Nginx** pada **geto** sebagai **Load Balancer** internal dengan upstream **api_cluster** yang mengarahkan trafik ke **nanami** dan **todo**. Terapkan algoritma **Weighted Round Robin** dengan bobot **3:1**, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Load Balancer | `geto` (`192.238.4.3`), Nginx |
+| Upstream | `api_cluster` |
+| Anggota upstream | `nanami` (`192.238.4.12`, `weight=3`) dan `todo` (`192.238.4.13`, `weight=1`) |
+| Algoritma | Weighted Round Robin 3:1 |
+| Pengujian | 8 request berturut-turut ke `http://192.238.4.3` |
+| Hasil distribusi | nanami **6** request, todo **2** request |
+| Rasio terukur | **6 : 2 = 3 : 1** (sesuai bobot) |
+| Request gagal | 0 (8 dari 8 `"status":"success"`) |
+ 
+ 
+## 4. Konfigurasi Load Balancer (geto)
+ 
+Skrip: `/root/setup-geto-no15.sh`
+ 
+### 4.1 Routing, DNS, dan instalasi
+ 
+```sh
+ip route add default via 192.238.4.1 2>/dev/null || true
+cat << 'RESOLV' > /etc/resolv.conf
+nameserver 192.238.1.2
+nameserver 192.238.1.3
+nameserver 192.168.122.1
+nameserver 8.8.8.8
+RESOLV
+ 
+apt-get update
+apt-get install -y nginx
+```
+ 
+DNS lokal (`192.238.1.2` dan `192.238.1.3`) diprioritaskan, diikuti DNS gateway internet dan `8.8.8.8` untuk mengunduh paket.
+ 
+### 4.2 Upstream dan virtual host (`/etc/nginx/sites-available/default`)
+ 
+```nginx
+upstream api_cluster {
+    server 192.238.4.12 weight=3;
+    server 192.238.4.13 weight=1;
+}
+ 
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+ 
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+ 
+| Direktif | Fungsi |
+|---|---|
+| `upstream api_cluster { ... }` | Mendefinisikan kelompok server backend |
+| `server 192.238.4.12 weight=3` | nanami mendapat bobot 3 |
+| `server 192.238.4.13 weight=1` | todo mendapat bobot 1 |
+| `proxy_pass http://api_cluster` | Meneruskan request ke upstream |
+| `proxy_set_header Host $host` | Meneruskan header Host asli |
+| `X-Real-IP` dan `X-Forwarded-For` | Meneruskan IP asal client ke backend (dipakai API untuk mencatat `client_ip`) |
+ 
+Nginx secara bawaan memakai round robin. Dengan atribut `weight`, algoritmanya menjadi weighted round robin: dalam tiap siklus 4 request, 3 diarahkan ke nanami dan 1 ke todo.
+ 
+### 4.3 Validasi dan restart
+ 
+```sh
+nginx -t && service nginx restart
+echo "=== LOAD BALANCER GETO (SOAL 15) SELESAI DIKONFIGURASI ==="
+```
+ 
+`nginx -t` memvalidasi sintaks sebelum service di-restart.
+ 
+## 5. Konfigurasi Backend (nanami dan todo)
+ 
+Agar hasil distribusi mudah dibaca, kedua backend mengembalikan JSON yang menyebut nama worker. Konfigurasi di `/etc/nginx/sites-available/default`:
+ 
+**nanami (`192.238.4.12`):**
+ 
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+ 
+    allow 127.0.0.1;
+    allow 192.238.4.3;
+    deny all;
+ 
+    location / {
+        default_type application/json;
+        return 200 '{"status":"success","worker":"nanami"}\n';
+    }
+}
+```
+ 
+**todo (`192.238.4.13`):** sama, dengan `return 200 '{"status":"success","worker":"todo"}\n';`
+ 
+Setelah menulis konfigurasi, tiap node menjalankan `nginx -t && service nginx restart`.
+ 
+| Elemen | Fungsi |
+|---|---|
+| `allow 192.238.4.3; deny all;` | Backend hanya menerima trafik dari geto (tetap sesuai pembatasan Soal 14) |
+| `return 200 '{"status":"success","worker":"..."}'` | Setiap backend menjawab dengan namanya sendiri sehingga distribusi bisa dihitung |
+ 
+Catatan: konfigurasi ini menggantikan virtual host PHP dari Soal 14 pada nanami dan todo dengan respons JSON statis. Akibatnya, request pada pengujian ini tidak lagi menulis log ke yaga. Jika layanan PHP yang mencatat ke database perlu dipulihkan, kembalikan konfigurasi Soal 14 (respons PHP sudah memuat field `worker`, sehingga tetap bisa dihitung dengan cara yang sama).
+ 
+## 6. Pengujian Distribusi Beban
+ 
+### 6.1 Perintah loop (dari `geto`)
+ 
+```sh
+for i in {1..8}; do echo -n "Request $i: "; curl -s http://192.238.4.3; done
+```
+ 
+### 6.2 Output
+ 
+```text
+Request 1: {"status":"success","worker":"todo"}
+Request 2: {"status":"success","worker":"nanami"}
+Request 3: {"status":"success","worker":"nanami"}
+Request 4: {"status":"success","worker":"nanami"}
+Request 5: {"status":"success","worker":"todo"}
+Request 6: {"status":"success","worker":"nanami"}
+Request 7: {"status":"success","worker":"nanami"}
+Request 8: {"status":"success","worker":"nanami"}
+```
+text<img width="528" height="136" alt="Screenshot 2026-10-14 at 18 20 23" src="https://github.com/user-attachments/assets/6bf57d18-fade-40a6-b06f-47a27ee4e47f" />
+ 
+### 6.3 Rekap
+ 
+| Request | Worker | | Request | Worker |
+|---|---|---|---|---|
+| 1 | todo | | 5 | todo |
+| 2 | nanami | | 6 | nanami |
+| 3 | nanami | | 7 | nanami |
+| 4 | nanami | | 8 | nanami |
+ 
+| Worker | Jumlah | Persentase | Bobot | Porsi ideal |
+|---|---|---|---|---|
+| nanami | 6 | 75% | 3 | 3/4 = 75% |
+| todo | 2 | 25% | 1 | 1/4 = 25% |
+| **Total** | **8** | 100% | 4 | 100% |
+ 
+### 6.4 Pola
+ 
+```
+
+Siklus 1 (request 1-4): todo, nanami, nanami, nanami
+Siklus 2 (request 5-8): todo, nanami, nanami, nanami
+```
+ 
+Setiap siklus empat request berisi tiga nanami dan satu todo, sehingga rasio terukur **6 : 2 = 3 : 1**, persis sama dengan bobot. Urutan dalam siklus (todo muncul lebih dulu) boleh berbeda dari bayangan "nanami, nanami, nanami, todo", karena Nginx memakai smooth weighted round robin yang menyebar pemilihan server secara merata, tetapi proporsi per siklus tetap sesuai bobot.
+ 
+## 7. Analisis Pemenuhan Soal
+ 
+| Persyaratan | Bukti | Status |
+|---|---|---|
+| Nginx sebagai Load Balancer di geto | `setup-geto-no15.sh`, `proxy_pass http://api_cluster` | Terpenuhi |
+| Upstream bernama `api_cluster` | `upstream api_cluster { ... }` | Terpenuhi |
+| Mengarah ke nanami dan todo | `server 192.238.4.12` dan `server 192.238.4.13` | Terpenuhi |
+| Weighted Round Robin 3:1 | `weight=3` untuk nanami, `weight=1` untuk todo | Terpenuhi |
+| Loop request berulang ke geto | Loop 8 request ke `192.238.4.3` | Terpenuhi |
+| Periksa rasio respons | nanami 6, todo 2 (3:1) | Terpenuhi |
+| Tidak ada request gagal | 8 dari 8 respons `success` | Terpenuhi |
  
