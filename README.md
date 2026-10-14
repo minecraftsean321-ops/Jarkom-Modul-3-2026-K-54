@@ -3183,12 +3183,71 @@ Lakukan pengujian di node `itadori` atau `ino`:
      - Request 7 - 20: `HTTP 503 Service Temporarily Unavailable`
    - Terbukti Gojo secara efektif membatasi lonjakan request berlebihan yang melebihi batas 10 r/s.
 
+## Laporan Soal 20: Audit Benchmark Kapasitas Layanan & Analisis Rate Limiting (Kusakabe)
+
+### Langkah 1: Persiapan & Eksekusi Benchmark dari Node `kusakabe`
+
+```bash 
+# 1. Pastikan utilitas Apache Benchmark (ab) terpasang
+apk update && apk add apache2-utils
+
+# 2. Benchmark 1: Web Frontend (Caching Aktif)
+ab -n 600 -c 30 http://jujutsu.k54.com/
+
+# 3. Benchmark 2: API Endpoint (Rate Limiting Aktif
+ab -n 600 -c 30 http://jujutsu.k54.com/api
+```
+
+<img width="1065" height="611" alt="image" src="https://github.com/user-attachments/assets/c605ef78-19aa-4ba9-afe2-a5ea3207076a" />
+<img width="1061" height="610" alt="image" src="https://github.com/user-attachments/assets/4b903b63-f9f5-4fcf-895f-7d4fbd783b17" />
+<img width="1061" height="613" alt="image" src="https://github.com/user-attachments/assets/eb23877a-f77e-4c6b-bc08-ba49e50f6d03" />
+<img width="1064" height="613" alt="image" src="https://github.com/user-attachments/assets/65255789-b1eb-4610-b8b2-7fe0404caf99" />
+<img width="1057" height="315" alt="image" src="https://github.com/user-attachments/assets/fb03225e-cbb3-4094-8c5b-2ad8a28ff8b8" />
 
 
+### Langkah 2: Analisis Log Ditolak Rate Limit di Node `gojo`
+Untuk membedakan request yang ditolak oleh aturan rate limiting dengan kegagalan server lainnya, periksa access log Nginx di terminal gojo (192.238.1.4):
+
+```
+# Cek request yang ditolak akibat Rate Limiting (HTTP Status 503)
+grep " 503 " /var/log/nginx/access.log | tail -n 10
+
+# Cek log error spesifik Nginx rate limit
+tail -n 20 /var/log/nginx/error.log
+```
+
+<img width="1061" height="611" alt="image" src="https://github.com/user-attachments/assets/e4b7f9d5-eb7b-4b63-a77a-2f84d0dffb08" />
+<img width="1066" height="614" alt="image" src="https://github.com/user-attachments/assets/4b5ff6d7-cd10-409e-a5a7-d4273fff53a5" />
+<img width="975" height="610" alt="image" src="https://github.com/user-attachments/assets/5d19e112-b803-4395-bc44-eaaee63f42d9" />
+<img width="1013" height="449" alt="image" src="https://github.com/user-attachments/assets/b945d06d-c7a8-49ed-9a26-bd2ae9ec9968" />
 
 
- 
+### 1. Ringkasan Hasil Benchmark (`ab -n 600 -c 30`)
 
+| Metrik Performa | Web Frontend (`/`) | API Endpoint (`/api`) | Analisis Singkat |
+|---|---|---|---|
+| **Requests per Second (RPS)** | `2330.20 req/s` | `4189.71 req/s` | `/api` memproses lebih cepat karena request berlebih langsung ditolak. |
+| **Time per Request (Latensi)** | `12.874 ms` | `7.160 ms` | Latensi `/api` lebih rendah karena balasan error `503` dikirim tanpa *overhead* backend. |
+| **Failed / Non-2xx Requests** | `0` (0%) | `593` (98.8%) | 593 request ditolak secara sengaja oleh aturan Rate Limiting (`10r/s burst=5`). |
+
+### 2. Kesimpulan Evaluasi Performa
+
+1. **Proxy Caching (`/`)**:
+   - `Failed requests: 0` menunjukkan keandalan tinggi.
+   - Nginx Proxy `gojo` berhasil menyajikan konten langsung dari memori cache tanpa membebankan Web Worker backend (`maki`/`panda`).
+
+2. **Rate Limiting (`/api`)**:
+   - Dari 600 request, **7 request** berhasil diproses (`200 OK`) dan **593 request** ditolak (`503`).
+   - Melindungi cluster API Worker (`nanami`, `todo`, `kirara`) dan database `yaga` dari *resource exhaustion*.
+
+### 3. Identifikasi Status Log pada Public Proxy (`gojo`)
+
+* **Rate Limit Rejection (`HTTP 503`)**:
+  * **Access Log**: `HTTP/1.0" 503 ... "ApacheBench/2.3"`
+  * **Error Log**: `limiting requests, excess: ... by zone "api_limit"`
+  * *Diagnosa*: Respon normal sistem penanganan rate limit.
+* **Application Failure (`HTTP 500`)**: Kesalahan logika PHP atau koneksi ke database `yaga` terputus.
+* **Connection Failure (`HTTP 502`)**: Service Nginx / PHP-FPM di node worker atau load balancer mati.
 
     
 
