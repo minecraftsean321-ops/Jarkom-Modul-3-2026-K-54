@@ -2254,3 +2254,251 @@ Baris `LOG_AWAL_YAGA` tidak pernah dimasukkan langsung di inumaki, tetapi muncul
 | Bukti replikasi | Data `LOG_AWAL_YAGA` dari Master terbaca di Slave | Terpenuhi |
  
 Catatan keamanan: akun `root`@`%` dan sandi `password123` yang tertulis di skrip hanya layak untuk lab. Pada lingkungan nyata, batasi akses ke subnet yang diperlukan (cukup `root`@`192.238.4.%`) dan gunakan sandi yang kuat.
+
+# Laporan Soal 14: Web Worker dan API Worker (Nginx + PHP-FPM) dengan Pembatasan Akses
+ 
+## 1. Soal
+ 
+> Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada **maki** dan **panda** untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada **nanami**, **todo**, dan **kirara**, siapkan layanan API yang mencatat log request ke database **yaga**. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui **geto**. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
+ 
+## 2. Ringkasan Hasil
+ 
+| Item | Hasil |
+|---|---|
+| Web Worker | `maki` (`192.238.4.2`) dan `panda` (`192.238.4.11`) |
+| API Worker | `nanami` (`192.238.4.12`), `todo` (`192.238.4.13`), `kirara` (`192.238.4.14`) |
+| Proxy web yang diizinkan | `gojo` (`192.238.1.4`), Public Reverse Proxy |
+| Proxy API yang diizinkan | `geto` (`192.238.4.3`), Internal Load Balancer |
+| Database log | `yaga` (`192.238.4.20`), `db_shibuya_k54`, tabel `request_logs` |
+| Virtual host | `server_name _ *.shibuya.k54.com shibuya.k54.com` |
+| Akses langsung dari `itadori` ke worker | **Ditolak** (`403 Forbidden`) |
+| Akses dari `gojo` ke web worker `maki` | **Berhasil** (`200 OK`, `Web Frontend Worker: maki`) |
+| Akses dari `geto` ke API worker `nanami` | **Berhasil** (`200 OK`, `application/json`) |
+ 
+## 3. Arsitektur
+ 
+Seluruh worker, `geto`, dan `yaga` berada di Network 4 (`192.238.4.0/24`). Pada topologi GNS3, `maki`, `panda`, `nanami`, `todo`, `kirara`, dan `geto` terhubung ke `Switch7`.
+ 
+```mermaid
+flowchart LR
+    C["Client (itadori, Network 2)"] -. "akses langsung: 403 Forbidden" .-> W
+    C -. "akses langsung: 403 Forbidden" .-> A
+    G["gojo<br/>Public Reverse Proxy<br/>192.238.1.4"] -->|"diizinkan"| W["Web Worker<br/>maki 192.238.4.2<br/>panda 192.238.4.11"]
+    L["geto<br/>Internal Load Balancer<br/>192.238.4.3"] -->|"diizinkan"| A["API Worker<br/>nanami .12, todo .13, kirara .14"]
+    A -->|"INSERT request_logs"| Y["yaga DB-Master<br/>192.238.4.20"]
+```
+ 
+## 4. Konfigurasi Web Worker (maki dan panda)
+ 
+Skrip: `/root/setup-web-worker.sh`
+ 
+### 4.1 Persiapan dan instalasi
+ 
+```sh
+ip route add default via 192.238.4.1 2>/dev/null || true
+cat << 'RESOLV' > /etc/resolv.conf
+nameserver 192.168.122.1
+nameserver 8.8.8.8
+RESOLV
+ 
+apt-get update
+apt-get install -y nginx php-fpm
+ 
+mkdir -p /run/php
+PHP_VER=$(ls /etc/php/ | head -n 1)
+service php${PHP_VER}-fpm start || /etc/init.d/php${PHP_VER}-fpm start || true
+PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
+```
+ 
+Versi PHP-FPM dideteksi otomatis dari `/etc/php/`, dan socket FastCGI dibentuk dari versi tersebut.
+ 
+### 4.2 Halaman web frontend (`/var/www/html/index.php`)
+ 
+```php
+<?php
+header('Content-Type: text/plain');
+echo "Web Frontend Worker: " . gethostname() . "\n";
+?>
+```
+ 
+Halaman menampilkan hostname node, sehingga terlihat worker mana yang melayani request.
+ 
+### 4.3 Virtual host Nginx (`/etc/nginx/sites-available/default`)
+ 
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/html;
+    index index.php index.html;
+    server_name _ *.shibuya.k54.com shibuya.k54.com;
+ 
+    # Hanya izinkan trafik dari Public Reverse Proxy gojo (192.238.1.4) & localhost
+    allow 127.0.0.1;
+    allow 192.238.1.4;
+    deny all;
+ 
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:${PHP_SOCK};
+    }
+}
+```
+ 
+## 5. Konfigurasi API Worker (nanami, todo, kirara)
+ 
+Skrip: `/root/setup-api-worker.sh`
+ 
+### 5.1 Persiapan dan instalasi
+ 
+Langkah gateway, DNS, dan deteksi versi PHP sama dengan web worker. Paket yang dipasang ditambah ekstensi MySQL:
+ 
+```sh
+apt-get install -y nginx php-fpm php-mysql
+```
+ 
+### 5.2 Layanan API (`/var/www/api/index.php`)
+ 
+```php
+<?php
+header('Content-Type: application/json');
+$db_host = '192.238.4.20';
+$db_user = 'root';
+$db_pass = 'password123';
+$db_name = 'db_shibuya_k54';
+ 
+$worker_name = gethostname();
+$client_ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'UNKNOWN';
+ 
+$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+if ($conn->connect_error) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'message' => 'DB Connection Failed: ' . $conn->connect_error]);
+    exit;
+}
+ 
+$stmt = $conn->prepare("INSERT INTO request_logs (worker_name, client_ip) VALUES (?, ?)");
+$stmt->bind_param("ss", $worker_name, $client_ip);
+$stmt->execute();
+ 
+echo json_encode([
+    'status' => 'success',
+    'message' => 'Request log saved to yaga database',
+    'worker' => $worker_name,
+    'client_ip' => $client_ip,
+    'log_id' => $stmt->insert_id
+]) . "\n";
+?>
+```
+ 
+| Bagian | Fungsi |
+|---|---|
+| Koneksi ke `192.238.4.20` | Terhubung ke DB-Master yaga memakai hak akses remote Network 4 (Soal 13) |
+| `worker_name = gethostname()` | Mencatat worker yang memproses request |
+| `client_ip` dari `HTTP_X_FORWARDED_FOR`, lalu `REMOTE_ADDR` | Mencatat IP asal; header `X-Forwarded-For` diisi oleh proxy |
+| `INSERT INTO request_logs` | Menyimpan log; `prepare`/`bind_param` mencegah SQL injection |
+| `http_response_code(500)` jika gagal | Kegagalan koneksi database terlihat sebagai HTTP 500 |
+| Respons JSON dengan `log_id` | Bukti log tersimpan |
+ 
+### 5.3 Virtual host Nginx
+ 
+```nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/api;
+    index index.php;
+    server_name _ *.shibuya.k54.com shibuya.k54.com;
+ 
+    # Hanya izinkan trafik dari Internal Load Balancer geto (192.238.4.3) & localhost
+    allow 127.0.0.1;
+    allow 192.238.4.3;
+    deny all;
+ 
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:${PHP_SOCK};
+    }
+}
+```
+ 
+## 6. Mekanisme Pembatasan Akses
+ 
+| Worker | Sumber yang diizinkan | Sumber lain |
+|---|---|---|
+| Web (`maki`, `panda`) | `127.0.0.1` dan `192.238.1.4` (gojo) | `deny all` → `403 Forbidden` |
+| API (`nanami`, `todo`, `kirara`) | `127.0.0.1` dan `192.238.4.3` (geto) | `deny all` → `403 Forbidden` |
+ 
+Direktif `allow` dievaluasi berurutan, dan `deny all` di akhir menolak semua sumber yang tidak tercantum. Pembatasan ini bekerja berdasarkan IP sumber koneksi, sehingga client biasa yang mengakses worker langsung tidak akan lolos.
+ 
+## 7. Pengujian
+ 
+### 7.1 Akses langsung dari client (`itadori`, Network 2): harus ditolak
+ 
+```sh
+curl -i http://192.238.4.12
+```
+ 
+```text
+HTTP/1.1 403 Forbidden
+Server: nginx
+Date: Wed, 14 Oct 2026 14:48:10 GMT
+Content-Type: text/html
+Content-Length: 146
+Connection: keep-alive
+ 
+<html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+```
+<img width="326" height="219" alt="Screenshot 2026-10-14 at 16 48 29" src="https://github.com/user-attachments/assets/dee29f1c-7721-4513-aa26-60f3bd28a4a4" />
+
+ 
+### 7.2 Akses melalui proxy web (`gojo`) ke web worker `maki`: harus berhasil
+ 
+```sh
+curl -i http://192.238.4.2
+```
+ 
+```text
+HTTP/1.1 200 OK
+Server: nginx
+Date: Wed, 14 Oct 2026 14:48:29 GMT
+Content-Type: text/plain;charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+ 
+Web Frontend Worker: maki
+```
+<img width="281" height="124" alt="Screenshot 2026-10-14 at 16 48 35" src="https://github.com/user-attachments/assets/bf2aefe2-1538-4d90-b899-036a8b2d37d0" />
+
+ 
+### 7.3 Akses melalui load balancer (`geto`) ke API worker `nanami`: harus berhasil
+ 
+```sh
+curl -i http://192.238.4.12
+```
+ 
+```text
+HTTP/1.1 200 OK
+Server: nginx
+Date: Wed, 14 Oct 2026 14:48:45 GMT
+Content-Type: application/json
+Transfer-Encoding: chunked
+Connection: keep-alive
+```
+<img width="300" height="96" alt="Screenshot 2026-10-14 at 16 48 42" src="https://github.com/user-attachments/assets/e68695de-8b47-4fbd-939d-4c5b0f34d4e2" />
+
+ 
+Respons berformat `application/json` dengan kode `200`. Pada kode API, kegagalan koneksi database akan menghasilkan HTTP `500`, sehingga `200 OK` menandakan koneksi ke yaga berhasil dan request tercatat.
+ 
