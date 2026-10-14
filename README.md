@@ -2677,4 +2677,115 @@ Setiap siklus empat request berisi tiga nanami dan satu todo, sehingga rasio ter
 | Loop request berulang ke geto | Loop 8 request ke `192.238.4.3` | Terpenuhi |
 | Periksa rasio respons | nanami 6, todo 2 (3:1) | Terpenuhi |
 | Tidak ada request gagal | 8 dari 8 respons `success` | Terpenuhi |
- 
+
+
+ ## Soal 16: Mengonfigurasi Public Reverse Porxy pada node gojo menggunakan **Path-Based Routing**.
+
+ ### Tabel Ringkasan Path-Based Routing (Public Proxy Gojo)
+
+| Domain Target | Path | Backend Proxy (`proxy_pass`) | Hasil Respon |
+|---|---|---|---|
+| `jujutsu.k54.com` / `www...` | `/` | `http://web_frontend` (`maki` / `panda`) | Text: `Web Frontend Worker: maki/panda` |
+| `jujutsu.k54.com` / `www...` | `/api` | `http://192.238.4.3/` (`geto`) | JSON: `{"status":"success","worker":"nanami/todo"}` |
+
+### **1. Script `/root/gojo-proxy.sh` di Node `gojo`**
+
+Jalankan seluruh blok perintah berikut di terminal node **`gojo`**:
+
+```bash
+cat << 'EOF' > /root/gojo-proxy.sh
+#!/bin/sh
+set -eu
+
+echo "=== [GOJO] Mengonfigurasi Public Reverse Proxy Path-Based Routing ==="
+
+# 1. Setting Gateway & DNS Resolver
+ip route replace default via 192.238.1.1 2>/dev/null || true
+cat << 'RESOLV' > /etc/resolv.conf
+nameserver 192.238.1.2
+nameserver 192.238.1.3
+RESOLV
+
+# 2. Instalasi Nginx jika belum terpasang
+if ! command -v nginx > /dev/null 2>&1; then
+    apt-get update && apt-get install -y nginx
+fi
+
+# 3. Konfigurasi Nginx Upstream & Virtual Host Path-Based Routing
+cat << 'NGINX_CONF' > /etc/nginx/sites-available/default
+upstream web_frontend {
+    server 192.238.4.2:80;
+    server 192.238.4.11:80;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name jujutsu.k54.com www.jujutsu.k54.com;
+
+    # Root Path (/) -> Round Robin ke Web Worker (Maki & Panda)
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # API Path (/api) -> Diteruskan langsung ke Internal Load Balancer Geto
+    location /api {
+        proxy_pass http://192.238.4.3/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+NGINX_CONF
+
+# 4. Validasi sintaks & Restart Service
+nginx -t
+service nginx restart || /etc/init.d/nginx restart || true
+
+echo "=== [GOJO] Setup Public Reverse Proxy Selesai ==="
+EOF
+
+chmod +x /root/gojo-proxy.sh
+
+# Registrasi Autostart Boot/Restart
+grep -qxF '/root/gojo-proxy.sh' /root/.profile || echo '/root/gojo-proxy.sh' >> /root/.profile
+grep -qxF '/root/gojo-proxy.sh' /root/.bashrc || echo '/root/gojo-proxy.sh' >> /root/.bashrc
+
+# Eksekusi Script Sekarang
+/root/gojo-proxy.sh
+
+```
+
+<img width="1086" height="725" alt="image" src="https://github.com/user-attachments/assets/3cb760e8-3e4e-42d5-9ec4-a9b62a3ff85c" />
+
+## Langkah 2: Pengujian 
+
+Masuk ke salah satu node client misal itadori atau ino, lalu jalankan pengujian berikut:
+
+1. Pengujian request root (`/`)
+   
+```
+curl -i http://jujutsu.k54.com/
+```
+Hasil yang diharapkan:
+- HTTP Statur: `200 OK`
+- Body: `Web Frontend Worker: maki` atau `Web Frontend Worker: panda` (berganti-ganti secara Round Robin jika di-curl berulang kali).
+
+<img width="1061" height="605" alt="image" src="https://github.com/user-attachments/assets/e2d0d385-90ee-4e56-af81-cc72481d8eb0" />
+
+2. Pengujian request path API (`/api`)
+
+```
+curl -i http://jujutsu.k54.com/api
+```
+
+Hasil yang Diharapkan:
+- HTTP Status: 200 OK
+- Content-Type: application/json
+- Body: {"status":"success","worker":"nanami"} atau {"status":"success","worker":"todo"} (diteruskan dari gojo -> geto -> API Worker)[cite: 26].
+
+<img width="1082" height="683" alt="image" src="https://github.com/user-attachments/assets/fb5de3bd-7ecb-49c8-ab8d-382193f9cdb8" />
+
