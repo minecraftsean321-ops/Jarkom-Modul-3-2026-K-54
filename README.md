@@ -2789,3 +2789,188 @@ Hasil yang Diharapkan:
 
 <img width="1082" height="683" alt="image" src="https://github.com/user-attachments/assets/fb5de3bd-7ecb-49c8-ab8d-382193f9cdb8" />
 
+## Soal 17: Mengonfigurasi node geto agar mempercayai proxy gojo menggunakan modul realip Nginx
+
+### Langkah 1: Konfigurasi script geto 
+
+```
+
+cat << 'EOF' > /root/setup-geto.sh
+#!/bin/sh
+set -eu
+
+echo "=== [GETO] Mengonfigurasi Real IP dari Proxy Gojo ==="
+
+ip route replace default via 192.238.4.1 2>/dev/null || true
+
+if ! command -v nginx > /dev/null 2>&1; then
+    apt-get update && apt-get install -y nginx
+fi
+
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+cat << 'NGINX_CONF' > /etc/nginx/sites-available/default
+upstream api_cluster {
+    server 192.238.4.12 weight=3;
+    server 192.238.4.13 weight=1;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    # Mempercayai Header Real-IP hanya dari Gojo (192.238.1.4)
+    set_real_ip_from 192.238.1.4;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+NGINX_CONF
+
+nginx -t
+service nginx restart || /etc/init.d/nginx restart || true
+echo "=== [GETO] Ready ==="
+EOF
+
+chmod +x /root/setup-geto.sh
+grep -qxF '/root/setup-geto.sh' /root/.profile || echo '/root/setup-geto.sh' >> /root/.profile
+grep -qxF '/root/setup-geto.sh' /root/.bashrc || echo '/root/setup-geto.sh' >> /root/.bashrc
+/root/setup-geto.sh
+
+```
+
+### Langkah 2: Mengupdate script di API Worker (nanami, todo, kirara) 
+Jalankan script tersebut di terminal `nanami`, `todo`, dan `kirara` agar script PHP memisahkan IP gabungan dan hanya mengambil IP asli milik klien:
+
+```
+cat << 'EOF' > /root/setup-api-worker.sh
+#!/bin/sh
+set -eu
+
+echo "=== Mengaktifkan API Worker dengan Real IP Tracking ==="
+
+ip route replace default via 192.238.4.1 2>/dev/null || true
+
+if ! command -v nginx > /dev/null 2>&1; then
+    apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false || true
+    apt-get install -y --allow-unauthenticated nginx php-fpm php-mysql || true
+fi
+
+mkdir -p /run/php /var/www/api
+PHP_VER=$(ls /etc/php/ 2>/dev/null | head -n 1 || echo "8.2")
+service php${PHP_VER}-fpm start 2>/dev/null || /etc/init.d/php${PHP_VER}-fpm start 2>/dev/null || true
+PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
+
+# Skrip PHP mengekstrak IP murni klien dari header proxy
+cat << 'PHP_API' > /var/www/api/index.php
+<?php
+header('Content-Type: application/json');
+$db_host = '192.238.4.20';
+$db_user = 'root';
+$db_pass = 'password123';
+$db_name = 'db_shibuya_k54';
+
+$worker_name = gethostname();
+
+$raw_ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'UNKNOWN';
+$ip_array = explode(',', $raw_ip);
+$client_ip = trim($ip_array[0]);
+
+$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+if ($conn->connect_error) {
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'message' => 'DB Connection Failed']);
+    exit;
+}
+
+$stmt = $conn->prepare("INSERT INTO request_logs (worker_name, client_ip) VALUES (?, ?)");
+$stmt->bind_param("ss", $worker_name, $client_ip);
+$stmt->execute();
+
+echo json_encode([
+    'status' => 'success',
+    'message' => 'Request log saved to yaga database',
+    'worker' => $worker_name,
+    'client_ip' => $client_ip,
+    'log_id' => $stmt->insert_id
+]) . "\n";
+?>
+PHP_API
+
+# Virtual Host Nginx: Memvalidasi IP fisik Geto (192.238.4.3)
+cat << NGINX_CONF > /etc/nginx/sites-available/default
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    root /var/www/api;
+    index index.php;
+    server_name _;
+
+    allow 127.0.0.1;
+    allow 192.238.4.3;
+    deny all;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:${PHP_SOCK};
+    }
+}
+NGINX_CONF
+
+nginx -t || true
+service nginx restart || /etc/init.d/nginx restart || true
+echo "=== API Worker Ready ==="
+EOF
+
+chmod +x /root/setup-api-worker.sh
+grep -qxF '/root/setup-api-worker.sh' /root/.profile || echo '/root/setup-api-worker.sh' >> /root/.profile
+grep -qxF '/root/setup-api-worker.sh' /root/.bashrc || echo '/root/setup-api-worker.sh' >> /root/.bashrc
+/root/setup-api-worker.sh
+```
+
+### Langkah 3: Pengujian 
+
+1. Kirim request dari Client Network 2 (itadori):
+
+   ```
+   curl -i http://jujutsu.k54.com/api
+   ```
+
+   <img width="1084" height="415" alt="image" src="https://github.com/user-attachments/assets/cab3c009-1222-4c98-b463-2cf0eb9621a4" />
+
+2. Kirim request dari Client Network 3 (ino):
+
+   ```
+    curl -i http://jujutsu.k54.com/api
+   ```
+
+   <img width="1058" height="367" alt="image" src="https://github.com/user-attachments/assets/ee32feea-958e-4cb0-a06d-08090bdcfb13" />
+
+3. Periksa database di Node `yaga`:
+
+   ```
+    mariadb -u root -D db_shibuya_k54 -e "SELECT * FROM request_logs;"
+   ```
+   Output yang diharapkan: Kolom client_ip pada database yaga hanya mencatat 192.238.2.10 atau 192.238.3.10, tanpa menyertakan IP perantara 192.238.1.4 (gojo) maupun          192.238.4.3 (geto).
+
+   <img width="1068" height="322" alt="image" src="https://github.com/user-attachments/assets/3c76e385-e6c5-421a-8ff1-37948895b8f2" />
+
+   Dari foto tersebut dapat terlihat bahwa request dua terakhir hanya mencatat IP klien asal yaitu `192.238.2.10` dan `192.238.3.10`.
+
+   
+
+
+
+
+
+   
