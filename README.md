@@ -2968,9 +2968,101 @@ grep -qxF '/root/setup-api-worker.sh' /root/.bashrc || echo '/root/setup-api-wor
    Dari foto tersebut dapat terlihat bahwa request dua terakhir hanya mencatat IP klien asal yaitu `192.238.2.10` dan `192.238.3.10`.
 
    
+## Soal 18: Memperbarui konfigurasi upstream api_cluster di node geto (192.238.4.3) untuk menambahkan parameter passive health check (max_fails=2 fail_timeout=5s) pada worker utama (nanami & todo)
+
+### Langkah 1: Konfigurasi node geto 
+
+```
+cat << 'EOF' > /root/setup-geto.sh
+#!/bin/sh
+set -eu
+
+echo "=== [GETO] Mengonfigurasi Upstream API Cluster dengan Backup Kirara ==="
+
+ip route replace default via 192.238.4.1 2>/dev/null || true
+
+if ! command -v nginx > /dev/null 2>&1; then
+    apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false || true
+    apt-get install -y --allow-unauthenticated nginx || true
+fi
+
+mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+
+cat << 'NGINX_CONF' > /etc/nginx/sites-available/default
+upstream api_cluster {
+    server 192.238.4.12:80 weight=3 max_fails=2 fail_timeout=5s;
+    server 192.238.4.13:80 weight=1 max_fails=2 fail_timeout=5s;
+    server 192.238.4.14:80 backup;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    set_real_ip_from 192.238.1.4;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+NGINX_CONF
+
+nginx -t || true
+service nginx restart || /etc/init.d/nginx restart || true
+echo "=== [GETO] Ready ==="
+EOF
+
+chmod +x /root/setup-geto.sh
+grep -qxF '/root/setup-geto.sh' /root/.profile || echo '/root/setup-geto.sh' >> /root/.profile
+grep -qxF '/root/setup-geto.sh' /root/.bashrc || echo '/root/setup-geto.sh' >> /root/.bashrc
+/root/setup-geto.sh
+```
+
+### Langkah 2: Simulasi Gangguan & Pengujian
+
+1. Kondisi normal (Worker Utama Aktif)
+   Jalankan request dari client `itadori` atau `ino`:
+   
+   ```
+    curl -i http://jujutsu.k54.com/api
+   ```
+
+   Output yang diharapkan: Respon dijawab oleh `nanami` atau `todo`.
+
+   <img width="1059" height="303" alt="image" src="https://github.com/user-attachments/assets/e1cd1318-9fda-4d35-aedc-0f1488ad3e8c" />
+
+   Dijawab oleh nanami.
+
+   <img width="1060" height="339" alt="image" src="https://github.com/user-attachments/assets/47073199-1726-4d8a-a83d-e9bb5b38eaef" />
+
+   Dijawab oleh todo.
+
+2. Matikan Layanan di Nginx `nanami` dan `todo`:
+
+   Jalankan perintah ini ke node nanami dan todo
+   
+   ```
+    service nginx stop
+   ```
+
+   <img width="1064" height="286" alt="image" src="https://github.com/user-attachments/assets/da701927-1bea-4ebd-83dd-e04eca759d11" />
+
+   <img width="530" height="167" alt="image" src="https://github.com/user-attachments/assets/26489425-de84-4485-9a95-dfac26392353" />
+
+   Dari kedua foto tersebut dapat terlihat bahwa ketika layanan Nginx di nanami dan todo dimatikan, perintah curl masih bekerja di node nanami dan todo karena node kirara     berhasil nge backup worker API nya.
+
+   
 
 
+    
 
 
-
+   
+   
    
