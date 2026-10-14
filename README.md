@@ -1748,3 +1748,286 @@ utahime.jujutsu.k54.com. root.jujutsu.k54.com. 2026101302 604800 86400 2419200 6
 | Setelah serial dinaikkan dan NOTIFY | **`2026101302`** |
  
 Serial di shoko berubah menjadi `2026101302` tanpa menyalin file secara manual, sehingga sinkronisasi zona otomatis (NOTIFY lalu zone transfer terotorisasi oleh `allow-transfer`) terbukti.
+
+# Laporan Soal 12: A Record, CNAME, Reverse DNS (PTR), dan DNS Forwarder
+ 
+## 1. Soal
+ 
+> Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada **utahime**, buat A record **jujutsu.<xxxx>.com** yang mengarah ke **gojo**, serta CNAME **www** yang merujuk ke domain utama tersebut. Buat pula **Reverse DNS (zona PTR)** untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur **DNS Forwarder** pada BIND9 mengarah ke IP gateway internet (**192.168.122.1**). Uji dari client dengan **dig** untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti **google.com**.
+ 
+Dengan `<xxxx>` = `k54`, domain utama adalah **`jujutsu.k54.com`**.
+ 
+|"zone transfer + NOTIFY"| S["shoko<br/>DNS Slave 192.238.1.3"]
+
+ 
+## 4. Konfigurasi DNS Master (utahime)
+ 
+Skrip: `/root/utahime-dns.sh` (diperbarui dari versi Soal 11). Variabel utama:
+ 
+```sh
+DOMAIN_NAME="jujutsu.k54.com"
+GOJO_IP="192.238.1.4"
+```
+ 
+### 4.1 DNS Forwarder (`/etc/bind/named.conf.options`)
+ 
+```conf
+options {
+    directory "/var/cache/bind";
+ 
+    forwarders {
+        192.168.122.1;
+    };
+ 
+    forward only;
+    dnssec-validation no;
+    auth-nxdomain no;
+    listen-on { any; };
+    listen-on-v6 { any; };
+    allow-query { any; };
+    recursion yes;
+};
+```
+ 
+| Direktif | Fungsi |
+|---|---|
+| `forwarders { 192.168.122.1; }` | Query di luar zona lokal diteruskan ke gateway internet |
+| `forward only` | utahime hanya bertanya ke forwarder, tidak melakukan resolusi iteratif sendiri |
+| `recursion yes` | Mengizinkan client memakai utahime sebagai resolver |
+| `allow-query { any; }` | Query diterima dari semua client |
+| `dnssec-validation no` | Menonaktifkan validasi DNSSEC (jalur forwarder lab) |
+ 
+### 4.2 Deklarasi zona (`/etc/bind/named.conf.local`)
+ 
+```conf
+zone "jujutsu.k54.com" {
+    type master;
+    file "/etc/bind/jujutsu/jujutsu.k54.com";
+    allow-transfer { 192.238.1.3; };
+    also-notify { 192.238.1.3; };
+};
+ 
+zone "1.238.192.in-addr.arpa" {
+    type master;
+    file "/etc/bind/jujutsu/192.238.1.rev";
+    allow-transfer { 192.238.1.3; };
+    also-notify { 192.238.1.3; };
+};
+```
+ 
+### 4.3 Zona forward (`/etc/bind/jujutsu/jujutsu.k54.com`)
+ 
+```dns
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k54.com. root.jujutsu.k54.com. (
+                        2026101303 ; Serial
+                            604800 ; Refresh
+                             86400 ; Retry
+                           2419200 ; Expire
+                            604800 ) ; Negative Cache TTL
+ 
+@       IN      NS      utahime.jujutsu.k54.com.
+@       IN      NS      shoko.jujutsu.k54.com.
+ 
+; A Record Pintu Masuk Utama (gojo)
+@       IN      A       192.238.1.4
+gojo    IN      A       192.238.1.4
+utahime IN      A       192.238.1.2
+shoko   IN      A       192.238.1.3
+ 
+; CNAME Record www
+www     IN      CNAME   jujutsu.k54.com.
+```
+ 
+### 4.4 Zona reverse (`/etc/bind/jujutsu/192.238.1.rev`)
+ 
+```dns
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k54.com. root.jujutsu.k54.com. (
+                        2026101303 ; Serial
+                            604800
+                             86400
+                           2419200
+                            604800 )
+ 
+@       IN      NS      utahime.jujutsu.k54.com.
+@       IN      NS      shoko.jujutsu.k54.com.
+ 
+; PTR Record (Host 4 -> jujutsu.k54.com / domain utama)
+4       IN      PTR     jujutsu.k54.com.
+2       IN      PTR     utahime.jujutsu.k54.com.
+3       IN      PTR     shoko.jujutsu.k54.com.
+```
+ 
+Nama zona reverse `1.238.192.in-addr.arpa` berasal dari subnet `192.238.1.0/24` dengan oktet dibalik. Karena itu, host `4` dalam zona ini adalah `192.238.1.4`, yaitu gojo.
+ 
+### 4.5 Validasi dan reload
+ 
+Skrip menjalankan:
+ 
+```sh
+named-checkconf
+named-checkzone jujutsu.k54.com /etc/bind/jujutsu/jujutsu.k54.com
+named-checkzone 1.238.192.in-addr.arpa /etc/bind/jujutsu/192.238.1.rev
+rndc reload || pkill -9 named; named -u bind
+```
+ 
+Serial dinaikkan menjadi `2026101303` (dari `2026101302` pada Soal 11), sehingga shoko mengenali perubahan dan menarik zona terbaru.
+ 
+## 5. Konfigurasi DNS Slave (shoko)
+ 
+Skrip: `/root/shoko-dns.sh` (diperbarui, mencetak "Setup DNS Slave Soal 12 Berhasil").
+ 
+```conf
+zone "jujutsu.k54.com" {
+    type slave;
+    file "/var/lib/bind/jujutsu.k54.com.saved";
+    masters { 192.238.1.2; };
+};
+ 
+zone "1.238.192.in-addr.arpa" {
+    type slave;
+    file "/var/lib/bind/192.238.1.rev.saved";
+    masters { 192.238.1.2; };
+};
+```
+ 
+Shoko kini ikut menjadi Slave untuk zona reverse, sehingga PTR juga tersedia di server kedua.
+ 
+## 6. Penyelesaian Kendala Konektivitas (jichi dan client)
+ 
+Sebelum pengujian, konektivitas client Network 2 ke utahime (Network 1) dan ke internet dipastikan lewat langkah berikut.
+ 
+### 6.1 Perbarui IP dan gateway di `itadori`
+ 
+```sh
+udhcpc -i eth0 -q
+ip -br addr
+ip route
+```
+ 
+Harapan: `itadori` mendapat `192.238.2.x` dan `default via 192.238.2.1`.
+ 
+### 6.2 Aktifkan IP forwarding dan NAT di `jichi`
+ 
+```sh
+sysctl -w net.ipv4.ip_forward=1
+iptables -F
+iptables -t nat -F
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+```
+ 
+| Perintah | Fungsi |
+|---|---|
+| `sysctl -w net.ipv4.ip_forward=1` | jichi meneruskan paket antar-network (Network 2 ↔ Network 1) |
+| `iptables -F` dan `iptables -t nat -F` | Membersihkan aturan lama yang mungkin menghalangi |
+| `iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE` | NAT keluar lewat `eth0` (jalur ke `NAT1`/internet) |
+ 
+Catatan: `sysctl -w` tidak permanen. Agar bertahan setelah restart, masukkan perintah yang sama ke `jichi-config.sh` atau set `net.ipv4.ip_forward=1` di `/etc/sysctl.conf`.
+ 
+## 7. Pengujian dari Client `itadori`
+ 
+### 7.1 Mengatur resolver
+ 
+```sh
+cat << 'EOF' > /etc/resolv.conf
+search jujutsu.k54.com
+nameserver 192.238.1.2
+nameserver 192.238.1.3
+EOF
+```
+ 
+### 7.2 Ping ke utahime (jalur konektivitas)
+ 
+```sh
+ping -c 2 192.238.1.2
+```
+ 
+```text
+64 bytes from 192.238.1.2: icmp_seq=1 ttl=63 time=0.800 ms
+64 bytes from 192.238.1.2: icmp_seq=2 ttl=63 time=0.611 ms
+2 packets transmitted, 2 received, 0% packet loss
+rtt min/avg/max/mdev = 0.611/0.705/0.800/0.094 ms
+```
+<img width="422" height="128" alt="Screenshot 2026-10-14 at 00 49 18" src="https://github.com/user-attachments/assets/b9dc99d7-e23c-492e-ad5d-1b07dc504b51" />
+
+ 
+`ttl=63` (64 dikurangi 1) menunjukkan paket melewati tepat satu router, yaitu jichi.
+ 
+### 7.3 A record domain utama
+ 
+```sh
+dig jujutsu.k54.com A
+```
+ 
+```text
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 22557
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+;; ANSWER SECTION:
+jujutsu.k54.com.    604800  IN  A   192.238.1.4
+;; SERVER: 192.238.1.2#53(192.238.1.2) (UDP)
+```
+<img width="532" height="307" alt="Screenshot 2026-10-14 at 00 49 51" src="https://github.com/user-attachments/assets/4d13ef75-d536-4d7f-8799-f07e04f73282" />
+
+ 
+### 7.4 CNAME `www`
+ 
+```sh
+dig www.jujutsu.k54.com CNAME
+```
+ 
+```text
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 64708
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+;; ANSWER SECTION:
+www.jujutsu.k54.com.   604800  IN  CNAME  jujutsu.k54.com.
+;; SERVER: 192.238.1.2#53(192.238.1.2) (UDP)
+```
+<img width="532" height="263" alt="Screenshot 2026-10-14 at 00 50 01" src="https://github.com/user-attachments/assets/0c4294c6-90a5-4cba-8388-c3db41b42c34" />
+
+ 
+### 7.5 Reverse DNS (PTR)
+ 
+```sh
+dig -x 192.238.1.4
+```
+ 
+```text
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 44590
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+;; QUESTION SECTION:
+;4.1.238.192.in-addr.arpa.   IN   PTR
+;; ANSWER SECTION:
+4.1.238.192.in-addr.arpa. 604800 IN PTR jujutsu.k54.com.
+;; SERVER: 192.238.1.2#53(192.238.1.2) (UDP)
+```
+<img width="521" height="291" alt="Screenshot 2026-10-14 at 00 50 26" src="https://github.com/user-attachments/assets/f4768db0-3360-436e-96b8-91afbc047773" />
+
+ 
+### 7.6 Ping ke domain internet (bukti forwarder)
+ 
+```sh
+ping -c 3 google.com
+```
+ 
+```text
+PING google.com (142.251.175.138) 56(84) bytes of data.
+64 bytes from sh-in-f138.1e100.net (142.251.175.138): icmp_seq=1 ttl=101 time=23.0 ms
+64 bytes from sh-in-f138.1e100.net (142.251.175.138): icmp_seq=2 ttl=101 time=23.7 ms
+64 bytes from sh-in-f138.1e100.net (142.251.175.138): icmp_seq=3 ttl=101 time=24.1 ms
+3 packets transmitted, 3 received, 0% packet loss, time 2212ms
+rtt min/avg/max/mdev = 22.978/23.583/24.077/0.455 ms
+```
+<img width="538" height="164" alt="Screenshot 2026-10-14 at 00 50 41" src="https://github.com/user-attachments/assets/9b8815c8-123e-43a6-978f-47a99ee1a1fa" />
+
+ 
+## 8. Analisis Pemenuhan Soal
+ 
+| Persyaratan | Bukti | Status |
+|---|---|---|
+| A record `jujutsu.k54.com` → gojo | `dig` A: `192.238.1.4`, status `NOERROR`, flag `aa` | Terpenuhi |
+| CNAME `www` → domain utama | `www.jujutsu.k54.com. CNAME jujutsu.k54.com.` | Terpenuhi |
+| Reverse DNS (PTR) untuk IP gojo | `dig -x 192.238.1.4` → `jujutsu.k54.com.` | Terpenuhi |
+| DNS Forwarder → `192.168.122.1` | `forwarders { 192.168.122.1; }` + `forward only`; flag `ra` aktif; `google.com` ter-resolve | Terpenuhi |
+| Uji `dig` dari client | Semua query dari `itadori` ke `192.238.1.2` | Terpenuhi |
+| Ping ke domain internet | `ping -c 3 google.com`: 3/3 diterima, 0% loss | Terpenuhi |
